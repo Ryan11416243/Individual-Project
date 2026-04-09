@@ -15,9 +15,13 @@ from sklearn.preprocessing import StandardScaler
 # CONFIGURATION
 # ==========================================
 FEATURES_TO_USE = [
-    'CC_LF', 'ASLE_LF', 'RMSE_LF',
-    'CC_MF', 'ASLE_MF', 'RMSE_MF',
-    'CC_HF', 'ASLE_HF', 'RMSE_HF',
+
+    'CCF_LF', 'LCC_LF', 'SDA_LF', 'SE_LF', 'CSD_LF',
+
+    'CCF_MF', 'LCC_MF', 'SDA_MF', 'SE_MF', 'CSD_MF',
+
+    'CCF_HF', 'LCC_HF', 'SDA_HF', 'SE_HF', 'CSD_HF',
+    
     'Peak_1_Hz', 'Peak_2_Hz', 'Peak_3_Hz', 'Peak_4_Hz', 'Peak_5_Hz',
     'Peak_1_dB', 'Peak_2_dB', 'Peak_3_dB', 'Peak_4_dB', 'Peak_5_dB',
 ]

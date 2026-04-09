@@ -6,14 +6,42 @@ from scipy.signal import find_peaks
 # ==========================================
 # CONFIGURATION SECTION
 # ==========================================
+# Format: ('Filename.txt', True_Label, 'Severity', 'Location_of_fault')
 FILE_CONFIG = [
-    ('Data_Healthy_Noise.txt', 0, '0%'),
-    ('Data_5Percent.txt',      1, '5%'),
-    ('Data_10Percent.txt',     1, '10%'),
-    ('Data_20Percent.txt',     1, '20%'),
-    ('./Local_Axial/High_5.txt', 2, '5%')
-    # Add your remaining 5 files below:
-    # ('Your_Next_File.txt',   1, '30%'),
+    ('Healthy\Data_Healthy_Noise.txt', 0, '0%',  'None'), # Example: No fault location
+    ('Healthy\More_Healthy.txt', 0, '0%', 'None'),
+    ('Healthy\healthy_extra' , 0, '0%', 'None'),
+
+    ('Data_5Percent.txt',      1, '5%',  'LV_Mid'),   # Example: Fault at Inductor 1
+    ('Data_10Percent.txt',     1, '10%', 'LV_Mid'),   # Example: Fault at Capacitor 2
+    ('Data_20Percent.txt',     1, '20%', 'LV_Mid'),
+
+    ('./Local_Axial/Low_5.txt', 2, '5%', 'LV_Low'),
+    ('./Local_Axial/Low_10.txt', 2, '10%', 'LV_Low'),
+    ('./Local_Axial/Low_20.txt', 2, '20%', 'LV_Low'),
+    ('./Local_Axial/Mid_5.txt', 2, '5%', 'LV_Mid'),
+    ('./Local_Axial/Mid_10.txt', 2, '10%', 'LV_Mid'),
+    ('./Local_Axial/Mid_20.txt', 2, '20%', 'LV_Mid'),
+    ('./Local_Axial/High_5.txt', 2, '5%', 'LV_High'),
+    ('./Local_Axial/High_10.txt', 2, '10%', 'LV_High'),
+    ('./Local_Axial/High_20.txt', 2, '20%', 'LV_High'),
+
+    ('./LCP/LCP_5percent.txt', 3, '5%', 'None'),
+    ('./LCP/LCP_10percent.txt', 3, '10%', 'None'),
+    ('./LCP/LCP_20percent.txt', 3, '20%', 'None'),
+
+
+    ('SC\SC_left_5percent', 4, '5%', 'LV_Low'),
+    ('SC\SC_left_10percent', 4, '10%', 'LV_Low'),
+    ('SC\SC_left_10percent', 4, '20%', 'LV_Low'),
+    ('SC\SC_mid_5percent', 4, '5%', 'LV_Mid'),
+    ('SC\SC_mid_10percent', 4, '10%', 'LV_Mid'),
+    ('SC\SC_mid_20percent', 4, '20%', 'LV_Mid'),
+    ('SC\SC_Right_5percent', 4, '5%', 'LV_High'),
+    ('SC\SC_Right_10percent', 4, '10%', 'LV_High'),
+    ('SC\SC_Right_20percent', 4, '20%', 'LV_High')
+
+    # ('.txt File',   Class, 'Severity', 'Location'),
 ]
 
 BASELINE_FILE = 'Baseline_NoNoise.txt'
@@ -53,14 +81,38 @@ def parse_ltspice_txt(filepath):
     return runs
 
 def calculate_statistical_indices(ref_mag, fault_mag):
-    """Calculates CC, ASLE, and RMSE between a reference and a fault array."""
-    cc = np.corrcoef(ref_mag, fault_mag)[0, 1]
-    
+    """
+    Calculates CCF, LCC, SDA, SE, and CSD between a reference and a fault array.
+    Assumes inputs are NumPy arrays in dB.
+    """
     n = len(ref_mag)
-    asle = np.sum(np.abs(fault_mag - ref_mag)) / n
-    rmse = np.sqrt(np.sum((fault_mag - ref_mag)**2) / n)
     
-    return cc, asle, rmse
+    # 1. CCF (Cross-Correlation Factor)
+    ccf = np.corrcoef(ref_mag, fault_mag)[0, 1]
+    
+    # Pre-calculate means for LCC and CSD
+    mean_ref = np.mean(ref_mag)
+    mean_fault = np.mean(fault_mag)
+    
+    # 2. LCC (Lin's Concordance Coefficient)
+    var_ref = np.var(ref_mag) 
+    var_fault = np.var(fault_mag) 
+    covar = np.cov(ref_mag, fault_mag, bias=True)[0, 1] 
+    
+    lcc = (2 * covar) / ((mean_fault - mean_ref)**2 + var_fault + var_ref)
+    
+    # 3. SDA (Standard Difference Area)
+    sda = np.sum(np.abs(fault_mag - ref_mag)) / np.sum(np.abs(ref_mag))
+    
+    # 4. SE (Sum of Errors)
+    se = np.sum(fault_mag - ref_mag) / n
+    
+    # 5. CSD (Comparative Standard Deviation)
+    # Calculates the variance of the mean-centered differences
+    mean_centered_diff = (fault_mag - mean_fault) - (ref_mag - mean_ref)
+    csd = np.sqrt(np.sum(mean_centered_diff**2) / (n - 1))
+    
+    return ccf, lcc, sda, se, csd
 
 def extract_features(parsed_runs, ref_run):
     """Loops through parsed runs, splits into sub-bands, and extracts ML features."""
@@ -77,31 +129,45 @@ def extract_features(parsed_runs, ref_run):
         freq = run['freq']
         mag = run['mag']
         
-        cc_lf, asle_lf, rmse_lf = calculate_statistical_indices(ref_mag_all[mask_lf], mag[mask_lf])
-        cc_mf, asle_mf, rmse_mf = calculate_statistical_indices(ref_mag_all[mask_mf], mag[mask_mf])
-        cc_hf, asle_hf, rmse_hf = calculate_statistical_indices(ref_mag_all[mask_hf], mag[mask_hf])
+        # Unpack the 5 variables per frequency band
+        ccf_lf, lcc_lf, sda_lf, se_lf, csd_lf = calculate_statistical_indices(ref_mag_all[mask_lf], mag[mask_lf])
+        ccf_mf, lcc_mf, sda_mf, se_mf, csd_mf = calculate_statistical_indices(ref_mag_all[mask_mf], mag[mask_mf])
+        ccf_hf, lcc_hf, sda_hf, se_hf, csd_hf = calculate_statistical_indices(ref_mag_all[mask_hf], mag[mask_hf])
         
+        # 2. Extract Physical Features (Resonant Peaks in the HF band)
         peaks, _ = find_peaks(mag[mask_hf], prominence=3) 
         
         hf_freqs = freq[mask_hf]
-        peak_freqs = hf_freqs[peaks]
+        hf_mags = mag[mask_hf] # <-- NEW: Isolate the HF magnitudes
         
-        # --- UPDATED: Now extracting up to 5 peaks ---
+        peak_freqs = hf_freqs[peaks]
+        peak_mags = hf_mags[peaks]   # <-- NEW: Get the dB values at those peaks
+        
+        # Extract Frequencies (Hz)
         p1 = peak_freqs[0] if len(peak_freqs) > 0 else np.nan
         p2 = peak_freqs[1] if len(peak_freqs) > 1 else np.nan
         p3 = peak_freqs[2] if len(peak_freqs) > 2 else np.nan
         p4 = peak_freqs[3] if len(peak_freqs) > 3 else np.nan
         p5 = peak_freqs[4] if len(peak_freqs) > 4 else np.nan
         
+        # Extract Magnitudes (dB)
+        m1 = peak_mags[0] if len(peak_mags) > 0 else np.nan
+        m2 = peak_mags[1] if len(peak_mags) > 1 else np.nan
+        m3 = peak_mags[2] if len(peak_mags) > 2 else np.nan
+        m4 = peak_mags[3] if len(peak_mags) > 3 else np.nan
+        m5 = peak_mags[4] if len(peak_mags) > 4 else np.nan
+        
+        # Compile the feature row
         feature_row = {
             'Run_ID': i + 1,
-            'CC_LF': cc_lf, 'ASLE_LF': asle_lf, 'RMSE_LF': rmse_lf,
-            'CC_MF': cc_mf, 'ASLE_MF': asle_mf, 'RMSE_MF': rmse_mf,
-            'CC_HF': cc_hf, 'ASLE_HF': asle_hf, 'RMSE_HF': rmse_hf,
-            # --- UPDATED: Added Peak 4 and Peak 5 to the dataset ---
-            'Peak_1_Hz': p1, 'Peak_2_Hz': p2, 'Peak_3_Hz': p3,
-            'Peak_4_Hz': p4, 'Peak_5_Hz': p5
-        }
+            'CCF_LF': ccf_lf, 'LCC_LF': lcc_lf, 'SDA_LF': sda_lf, 'SE_LF': se_lf, 'CSD_LF': csd_lf,
+            'CCF_MF': ccf_mf, 'LCC_MF': lcc_mf, 'SDA_MF': sda_mf, 'SE_MF': se_mf, 'CSD_MF': csd_mf,
+            'CCF_HF': ccf_hf, 'LCC_HF': lcc_hf, 'SDA_HF': sda_hf, 'SE_HF': se_hf, 'CSD_HF': csd_hf,
+            'Peak_1_Hz': p1, 'Peak_1_dB': m1,
+            'Peak_2_Hz': p2, 'Peak_2_dB': m2,
+            'Peak_3_Hz': p3, 'Peak_3_dB': m3,
+            'Peak_4_Hz': p4, 'Peak_4_dB': m4,
+            'Peak_5_Hz': p5, 'Peak_5_dB': m5}
         dataset.append(feature_row)
         
     return pd.DataFrame(dataset)
@@ -121,7 +187,8 @@ if __name__ == "__main__":
 
     all_datasets = []
 
-    for filename, label, severity in FILE_CONFIG:
+    # --- UPDATED: Unpacking 4 variables now instead of 3 ---
+    for filename, label, severity, fault_location in FILE_CONFIG:
         if os.path.exists(filename):
             print(f"Processing {filename}...")
             parsed_runs = parse_ltspice_txt(filename)
@@ -131,6 +198,8 @@ if __name__ == "__main__":
             df['Source_File'] = filename 
             df['True_Label'] = label
             df['Severity'] = severity
+            # --- UPDATED: Added the new column here ---
+            df['Location_of_fault'] = fault_location 
             
             all_datasets.append(df)
         else:
@@ -139,7 +208,8 @@ if __name__ == "__main__":
     if all_datasets:
         master_dataset = pd.concat(all_datasets, ignore_index=True)
         
-        front_cols = ['Source_File', 'Run_ID', 'True_Label', 'Severity']
+        # --- UPDATED: Added Location_of_fault to the front columns list ---
+        front_cols = ['Source_File', 'Run_ID', 'True_Label', 'Severity', 'Location_of_fault']
         remaining_cols = [c for c in master_dataset.columns if c not in front_cols]
         master_dataset = master_dataset[front_cols + remaining_cols]
         
