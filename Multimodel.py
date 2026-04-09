@@ -22,24 +22,41 @@ FEATURES_TO_USE = [
     'Peak_1_dB', 'Peak_2_dB', 'Peak_3_dB', 'Peak_4_dB', 'Peak_5_dB',
 ]
 
-# Set to 3 classes to match your 85% baseline. 
-# Change to [0, 1, 2, 3] if you add a 4th class later.
-CLASSES_TO_INCLUDE = [0, 1, 2] 
+# Set to 3 classes to match 85% baseline. 
+CLASSES_TO_INCLUDE = [0, 1, 2, 3, 4] 
+
+# New Configuration Filters
+SEVERITIES_TO_INCLUDE = ['0%', '5%', '10%','20%']
+LOCATIONS_TO_INCLUDE = ['None', 'LV_Low', 'LV_Mid', 'LV_High']
 
 # ==========================================
 # 1. LOAD AND PREPARE DATA
 # ==========================================
 print("Loading dataset...")
 df = pd.read_csv('Master_ML_Dataset.csv')
+
+# Only fill numeric missing values with 0 (prevents overwriting string nulls)
+df['Location_of_fault'] = df['Location_of_fault'].fillna('None').astype(str).str.strip()
+df['Severity'] = df['Severity'].fillna('0%').astype(str).str.strip()
+
+# Fill the rest of the numeric dataframe with 0
 df.fillna(0, inplace=True)
+
+# Apply Filters
 df = df[df['True_Label'].isin(CLASSES_TO_INCLUDE)]
+df = df[df['Severity'].isin(SEVERITIES_TO_INCLUDE)]
+df = df[df['Location_of_fault'].isin(LOCATIONS_TO_INCLUDE)]
+
+print(f"Rows after filtering: {len(df)}")
+print("\nRemaining Class Distribution:")
+print(df['True_Label'].value_counts())
 
 X = df[FEATURES_TO_USE] 
 y = df['True_Label']
 feature_names = X.columns
 
 # ==========================================
-# 2. STRICT LEAKAGE-FREE DATA SPLITTING
+# 2. DATA SPLITTING
 # ==========================================
 # A. Create the Raw Split (For Random Forest)
 X_train_raw, X_test_raw, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
@@ -64,7 +81,7 @@ results = []
 trained_models = {}
 target_names = [f"Class {int(i)}" for i in sorted(y.unique())]
 
-print("Running Strict Leakage-Free Cross-Validation and Training...\n")
+print("Running Cross-Validation and Training...\n")
 
 # ==========================================
 # 4. EVALUATE AND TRAIN
@@ -76,7 +93,7 @@ for i, (name, model) in enumerate(models.items()):
     
     if name == "Random Forest":
         # RF gets RAW data directly
-        cv_scores = cross_val_score(model, X, y, cv=5)
+        cv_scores = cross_val_score(model, X_train_raw, y_train, cv=5)
         model.fit(X_train_raw, y_train)
         y_pred = model.predict(X_test_raw)
     else:
@@ -85,7 +102,7 @@ for i, (name, model) in enumerate(models.items()):
             ('scaler', StandardScaler()),
             ('classifier', model)
         ])
-        cv_scores = cross_val_score(pipeline, X, y, cv=5)
+        cv_scores = cross_val_score(pipeline, X_train_raw, y_train, cv=5)
         
         # Train final model on safely scaled train split, predict on test split
         model.fit(X_train_scaled, y_train)
