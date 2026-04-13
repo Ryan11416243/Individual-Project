@@ -28,7 +28,7 @@ params_LV = {
 fault_config = {
     "active": True,
     "type": "radial",
-    "units_affected": [3, 4, 5],  # Can be a single int like 8, or a list like [1, 2], or list(range(3, 6))
+    "units_affected": [3,4,5],  # Can be a single int like 8, or a list like [1, 2], or list(range(3, 6))
     "C_g_multiplier": 1.5,
     "L_air_multiplier": 1.0,
     "C_s_multiplier": 1.0,
