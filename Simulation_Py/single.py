@@ -27,14 +27,14 @@ params_LV = {
 # This dictionary format is perfect for a future GUI to update dynamically
 fault_config = {
     "active": True,
-    "type": "radial",
-    "units_affected": [3,4,5],  # Can be a single int like 8, or a list like [1, 2], or list(range(3, 6))
-    "C_g_multiplier": 1.5,
+    "type": "axial",
+    "units_affected": [5],  # Can be a single int like 8, or a list like [1, 2], or list(range(3, 6))
+    "C_g_multiplier": 0.85,
     "L_air_multiplier": 1.0,
-    "C_s_multiplier": 1.0,
+    "C_s_multiplier": 0.85,
 
     "export_baseline": "sim_baseline_healthy.txt",
-    "export_faulted": "sim_radial_fault_units4-6.txt"
+    "export_faulted": "sim_axial_5.txt"
 }
 
 # General Setup

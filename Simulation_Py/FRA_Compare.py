@@ -89,9 +89,9 @@ def calculate_metrics(f1, m1, f2, m2):
 if __name__ == "__main__":
     
     # --- CONFIGURATION ---
-    # Put your exact filenames here. Ensure they are in the same folder as this script.
-    file_1_path = "Simulation_Py\sim_radial_fault_units4-6.txt"   # e.g., Your Python output
-    file_2_path = "Simulation_Py\ltspice_radial.txt"           # e.g., Your LTSpice output
+    # Put exact filenames here.
+    file_1_path = "Simulation_Py\sim_axial_5.txt"   
+    file_2_path = "Simulation_Py\ltspice_axial.txt"           
     
     label_1 = "Python Model"
     label_2 = "LTSpice Export"
