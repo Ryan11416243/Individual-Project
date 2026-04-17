@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
 # ==========================================
 # CONFIGURATION BLOCK
@@ -7,6 +8,9 @@ import matplotlib.pyplot as plt
 N_HV = 10
 N_LV = 16
 STEPS = 2000
+
+NO_OF_HEALTHY = 5
+NO_OF_FAULT = 5
 
 # Base parameters (from Cheng et al.)
 params_HV = {
@@ -37,7 +41,9 @@ fault_config = {
     "export_faulted": "sim_LCP_0.9.txt"
 }
 
-
+# -----------------------
+# Toggles the Application of Variation Stages 
+# -----------------------
 stochastic_config = {
     "apply_stage1_inter_unit": True,        # Global shift: Transformer Fingerprint
     "apply_stage2_intra_unit": True,        # Local shift: Operational Variation
@@ -219,25 +225,75 @@ def calculate_fra_dynamic(L_array, C_g_array, C_s_array, frequencies):
 def export_to_txt(filename, freq_array, mag_array):
     """
     Exports frequency and magnitude arrays to a tab-separated text file.
+    Automatically creates necessary directories if they don't exist.
     """
     import os
     
     # Get the directory where the script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Resolve the full absolute path, combining script dir with the target folder/filename
     filepath = os.path.join(script_dir, filename)
     
+    target_dir = os.path.dirname(filepath)
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir)
+        
     # Write the data
     with open(filepath, 'w', encoding='utf-8') as file:
-        # Write a header line
         file.write("Frequency(Hz)\tMagnitude(dB)\n")
         
-        # Loop through the arrays and write each row
         for f, m in zip(freq_array, mag_array):
-            # Using scientific notation (%e) to match standard engineering exports
             file.write(f"{f:e}\t{m:e}\n")
             
-    print(f"Data successfully exported to: {filepath}")
+    # print(f"Data successfully exported to: {filepath}") # Mute if batch printing gets too noisy
 
+# ----------------------------------------------
+# Run in Batches
+# ----------------------------------------------
+def generate_batch(num_sets, output_dir, file_prefix, active_config, stochastic_config, fault_config, frequencies):
+    """
+    Generates a batch of FRA datasets.
+    The first set (index 0) is forced to be the nominal/deterministic baseline.
+    Subsequent sets utilize the stochastic configurations.
+    """
+    # Ensure the output directory exists
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    for i in range(num_sets):
+        # Create a local copy of the stochastic config so we can safely modify it for the first run
+        current_stoch_config = stochastic_config.copy()
+        
+        # Force the first set to be purely nominal
+        if i == 0:
+            print(f"\n--- Generating Set {i}: Pure Nominal Baseline ---")
+            current_stoch_config["apply_stage1_inter_unit"] = False
+            current_stoch_config["apply_stage2_intra_unit"] = False
+            current_stoch_config["apply_stage4_measurement_noise"] = False 
+        else:
+            print(f"--- Generating Set {i}: Stochastic Variation ---")
+
+        # 1. Build Baseline Arrays
+        L_base, Cg_base, Cs_base = apply_stochastic_baseline(active_config, current_stoch_config)
+        
+        # 2. Apply Faults (if active)
+        if fault_config["active"]:
+            L_net, Cg_net, Cs_net = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), fault_config)
+        else:
+            L_net, Cg_net, Cs_net = L_base, Cg_base, Cs_base
+
+        # 3. Solve the Admittance Matrix
+        mag_db = calculate_fra_dynamic(L_net, Cg_net, Cs_net, frequencies)
+
+        # 4. Apply Stage 4 Output Noise (if active in current config)
+        if current_stoch_config["apply_stage4_measurement_noise"]:
+            mag_db = add_measurement_noise(mag_db, noise_level=current_stoch_config["noise_level_stage4"])
+
+        # 5. Export to File
+        # Example output: "Healthy_Data/Healthy_Trace_0.txt"
+        filename = os.path.join(output_dir, f"{file_prefix}_{i}.txt")
+        export_to_txt(filename, frequencies, mag_db)
 
 # ==========================================
 # RUN AND COMPARE
@@ -260,28 +316,37 @@ def export_to_txt(filename, freq_array, mag_array):
 
 if __name__ == "__main__":
     
-    # 1. Generate baseline network (Handles Stage 1 & 2 toggles internally)
-    L_base, Cg_base, Cs_base = apply_stochastic_baseline(active_config, stochastic_config)
-    mag_baseline = calculate_fra_dynamic(L_base, Cg_base, Cs_base, frequencies)
+    # ---------------------------------------------
+    # Example A: Generate Healthy Dataset
+    # ---------------------------------------------
+    print("STARTING HEALTHY BATCH GENERATION...")
+    fault_config["active"] = False
     
-    # 2. Conditionally apply Stage 4 Measurement Noise to Baseline
-    if stochastic_config["apply_stage4_measurement_noise"]:
-        mag_baseline = add_measurement_noise(mag_baseline, noise_level=stochastic_config["noise_level_stage4"])
+    generate_batch(
+        num_sets= NO_OF_HEALTHY,                     
+        output_dir="Simulation_Healthy", # Saves to a folder named "Simulation_Healthy"
+        file_prefix="Trace",             # Files will be named Trace_0.txt, Trace_1.txt, etc.
+        active_config=active_config, 
+        stochastic_config=stochastic_config, 
+        fault_config=fault_config, 
+        frequencies=frequencies
+    )
 
-    # 3. Export Baseline
-    export_to_txt(fault_config["export_baseline"], frequencies, mag_baseline)
-
-    # 4. Generate and solve faulted network
-    if fault_config["active"]:
-        # Apply the fault strictly to a copy of the finalized baseline arrays
-        L_fault, Cg_fault, Cs_fault = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), fault_config)
-        mag_faulted = calculate_fra_dynamic(L_fault, Cg_fault, Cs_fault, frequencies)
-        
-        # Conditionally apply Stage 4 Measurement Noise to Faulted signal
-        if stochastic_config["apply_stage4_measurement_noise"]:
-            mag_faulted = add_measurement_noise(mag_faulted, noise_level=stochastic_config["noise_level_stage4"])
-            
-        # Export Faulted
-        export_to_txt(fault_config["export_faulted"], frequencies, mag_faulted)
-
-
+    # ---------------------------------------------
+    # Example B: Generate Radial Fault Dataset (10% Severity)
+    # ---------------------------------------------
+    print("\nSTARTING RADIAL FAULT BATCH GENERATION...")
+    fault_config["active"] = True
+    fault_config["type"] = "Radial"
+    fault_config["units_affected"] = [3]  # Affects unit 3
+    fault_config["C_g_multiplier"] = 1.10 # +10% Cg severity
+    
+    generate_batch(
+        num_sets= NO_OF_FAULT,                       
+        output_dir="Simulation_Radial", 
+        file_prefix="Sev_10", 
+        active_config=active_config, 
+        stochastic_config=stochastic_config, 
+        fault_config=fault_config, 
+        frequencies=frequencies
+    )
