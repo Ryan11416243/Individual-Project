@@ -90,8 +90,8 @@ if __name__ == "__main__":
     
     # --- CONFIGURATION ---
     # Put exact filenames here.
-    file_1_path = "Simulation_Py\sim_axial_5.txt"   
-    file_2_path = "Simulation_Py\ltspice_axial.txt"           
+    file_1_path = "Simulation_Py\sim_LCP_0.9.txt"   
+    file_2_path = "Simulation_Py\ltspice_LCP.txt"           
     
     label_1 = "Python Model"
     label_2 = "LTSpice Export"

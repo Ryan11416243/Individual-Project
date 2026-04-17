@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. CONFIGURATION BLOCK
+# CONFIGURATION BLOCK
 # ==========================================
 N_HV = 10
 N_LV = 16
@@ -27,14 +27,14 @@ params_LV = {
 # This dictionary format is perfect for a future GUI to update dynamically
 fault_config = {
     "active": True,
-    "type": "axial",
-    "units_affected": [5],  # Can be a single int like 8, or a list like [1, 2], or list(range(3, 6))
-    "C_g_multiplier": 0.85,
+    "type": "Radial",
+    "units_affected": [3],  # Can be a single int like 8, or a list like [1, 2], or list(range(3, 6))
+    "C_g_multiplier": 1.0,
     "L_air_multiplier": 1.0,
-    "C_s_multiplier": 0.85,
+    "C_s_multiplier": 1.0,
 
     "export_baseline": "sim_baseline_healthy.txt",
-    "export_faulted": "sim_axial_5.txt"
+    "export_faulted": "sim_LCP_0.9.txt"
 }
 
 # General Setup
@@ -44,7 +44,7 @@ V_in = 1.0
 frequencies = np.logspace(np.log10(10), np.log10(1e6), STEPS)
 
 # ==========================================
-# 2. NETWORK GENERATOR MODULE
+# NETWORK GENERATOR MODULE
 # ==========================================
 def build_network_arrays(config):
     """
@@ -95,8 +95,63 @@ def apply_fault(L_array, C_g_array, C_s_array, fault):
         
     return L_array, C_g_array, C_s_array
 
+# =========================================
+# Noise and Variation Application
+# =========================================
+def apply_stochastic_baseline(config):
+    """
+    Implements the hybrid stochastic parameter variation (Table 1).
+    Generates a unique transformer fingerprint (Stage 1) and adds 
+    operational noise per-stage (Stage 2).
+    """
+    n = config["stages"]
+    
+    # Base per-stage nominal values
+    L_nom = config["L_air"] / n
+    C_g_nom = config["C_g"] / n
+    C_s_nom = config["C_s"] * n
+    
+    # ----------------------------------------------------
+    # STAGE 1: Transformer Fingerprint (Inter-Unit Variability)
+    # Applies a global shift to simulate manufacturing tolerances
+    # Cs, Cg: ~5% std dev | Ls: ~3.5% std dev
+    # ----------------------------------------------------
+    fp_C = np.random.normal(1.0, 0.05)  
+    fp_L = np.random.normal(1.0, 0.035) 
+    
+    L_fp = L_nom * fp_L
+    C_g_fp = C_g_nom * fp_C
+    C_s_fp = C_s_nom * fp_C
+    
+    # ----------------------------------------------------
+    # STAGE 2: Operational Variation (Intra-Unit Noise)
+    # Applies localized variance to every individual stage
+    # Cs, Cg: ~1.25% std dev | Ls: ~0.75% std dev
+    # ----------------------------------------------------
+    L_array = np.random.normal(L_fp, L_fp * 0.0075, n)
+    C_g_array = np.random.normal(C_g_fp, C_g_fp * 0.0125, n)
+    C_s_array = np.random.normal(C_s_fp, C_s_fp * 0.0125, n)
+    
+    return L_array, C_g_array, C_s_array
+
+def add_measurement_noise(magnitudes_dB, noise_level=0.01):
+    """
+    Implements Stage 4: 0.5% to 2% Gaussian Measurement Noise applied 
+    to the final output magnitude.
+    """
+    # ------------------------------------------------------
+    # Stage 4: Measurement Noise
+    # ------------------------------------------------------
+    # Base noise is scaled dynamically to the signal strength
+    
+    noise = np.random.normal(0, np.abs(magnitudes_dB) * noise_level, len(magnitudes_dB))
+    return magnitudes_dB + noise
+
+
+
+
 # ==========================================
-# 3. ADVANCED MATRIX SOLVER ENGINE
+# ADVANCED MATRIX SOLVER ENGINE
 # ==========================================
 def calculate_fra_dynamic(L_array, C_g_array, C_s_array, frequencies):
     """
@@ -172,7 +227,7 @@ def export_to_txt(filename, freq_array, mag_array):
 
 
 # ==========================================
-# 5. RUN AND COMPARE
+# RUN AND COMPARE
 # ==========================================
 # Generate baseline network
 L_base, Cg_base, Cs_base = build_network_arrays(active_config)
