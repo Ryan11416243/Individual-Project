@@ -37,6 +37,14 @@ fault_config = {
     "export_faulted": "sim_LCP_0.9.txt"
 }
 
+
+stochastic_config = {
+    "apply_stage1_inter_unit": True,        # Global shift: Transformer Fingerprint
+    "apply_stage2_intra_unit": True,        # Local shift: Operational Variation
+    "apply_stage4_measurement_noise": True, # Output shift: Measurement Noise
+    "noise_level_stage4": 0.01              # 1% standard deviation for Stage 4
+}
+
 # General Setup
 active_config = params_LV 
 R_load = 50.0             
@@ -98,7 +106,7 @@ def apply_fault(L_array, C_g_array, C_s_array, fault):
 # =========================================
 # Noise and Variation Application
 # =========================================
-def apply_stochastic_baseline(config):
+def apply_stochastic_baseline(config, stoch_config):
     """
     Implements the hybrid stochastic parameter variation (Table 1).
     Generates a unique transformer fingerprint (Stage 1) and adds 
@@ -113,25 +121,30 @@ def apply_stochastic_baseline(config):
     
     # ----------------------------------------------------
     # STAGE 1: Transformer Fingerprint (Inter-Unit Variability)
-    # Applies a global shift to simulate manufacturing tolerances
-    # Cs, Cg: ~5% std dev | Ls: ~3.5% std dev
     # ----------------------------------------------------
-    fp_C = np.random.normal(1.0, 0.05)  
-    fp_L = np.random.normal(1.0, 0.035) 
-    
+    if stoch_config["apply_stage1_inter_unit"]:
+        fp_C = np.random.normal(1.0, 0.05)  
+        fp_L = np.random.normal(1.0, 0.035) 
+    else:
+        fp_C, fp_L = 1.0, 1.0  # Deterministic fallback
+        
     L_fp = L_nom * fp_L
     C_g_fp = C_g_nom * fp_C
     C_s_fp = C_s_nom * fp_C
     
     # ----------------------------------------------------
     # STAGE 2: Operational Variation (Intra-Unit Noise)
-    # Applies localized variance to every individual stage
-    # Cs, Cg: ~1.25% std dev | Ls: ~0.75% std dev
     # ----------------------------------------------------
-    L_array = np.random.normal(L_fp, L_fp * 0.0075, n)
-    C_g_array = np.random.normal(C_g_fp, C_g_fp * 0.0125, n)
-    C_s_array = np.random.normal(C_s_fp, C_s_fp * 0.0125, n)
-    
+    if stoch_config["apply_stage2_intra_unit"]:
+        L_array = np.random.normal(L_fp, L_fp * 0.0075, n)
+        C_g_array = np.random.normal(C_g_fp, C_g_fp * 0.0125, n)
+        C_s_array = np.random.normal(C_s_fp, C_s_fp * 0.0125, n)
+    else:
+        # Fill arrays with the deterministic (or Stage 1 shifted) values
+        L_array = np.full(n, L_fp)
+        C_g_array = np.full(n, C_g_fp)
+        C_s_array = np.full(n, C_s_fp)
+        
     return L_array, C_g_array, C_s_array
 
 def add_measurement_noise(magnitudes_dB, noise_level=0.01):
@@ -143,7 +156,7 @@ def add_measurement_noise(magnitudes_dB, noise_level=0.01):
     # Stage 4: Measurement Noise
     # ------------------------------------------------------
     # Base noise is scaled dynamically to the signal strength
-    
+
     noise = np.random.normal(0, np.abs(magnitudes_dB) * noise_level, len(magnitudes_dB))
     return magnitudes_dB + noise
 
@@ -230,16 +243,45 @@ def export_to_txt(filename, freq_array, mag_array):
 # RUN AND COMPARE
 # ==========================================
 # Generate baseline network
-L_base, Cg_base, Cs_base = build_network_arrays(active_config)
-mag_baseline = calculate_fra_dynamic(L_base, Cg_base, Cs_base, frequencies)
+# _base, Cg_base, Cs_base = build_network_arrays(active_config)
+# mag_baseline = calculate_fra_dynamic(L_base, Cg_base, Cs_base, frequencies)
 
 # EXPORT BASELINE
-export_to_txt(fault_config["export_baseline"], frequencies, mag_baseline)
+# export_to_txt(fault_config["export_baseline"], frequencies, mag_baseline)
 
 # Generate and solve faulted network
-if fault_config["active"]:
-    L_fault, Cg_fault, Cs_fault = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), fault_config)
-    mag_faulted = calculate_fra_dynamic(L_fault, Cg_fault, Cs_fault, frequencies)
+# if fault_config["active"]:
+#    L_fault, Cg_fault, Cs_fault = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), fault_config)
+#    mag_faulted = calculate_fra_dynamic(L_fault, Cg_fault, Cs_fault, frequencies)
     
     # EXPORT FAULTED
-    export_to_txt(fault_config["export_faulted"], frequencies, mag_faulted)
+#    export_to_txt(fault_config["export_faulted"], frequencies, mag_faulted)
+
+
+if __name__ == "__main__":
+    
+    # 1. Generate baseline network (Handles Stage 1 & 2 toggles internally)
+    L_base, Cg_base, Cs_base = apply_stochastic_baseline(active_config, stochastic_config)
+    mag_baseline = calculate_fra_dynamic(L_base, Cg_base, Cs_base, frequencies)
+    
+    # 2. Conditionally apply Stage 4 Measurement Noise to Baseline
+    if stochastic_config["apply_stage4_measurement_noise"]:
+        mag_baseline = add_measurement_noise(mag_baseline, noise_level=stochastic_config["noise_level_stage4"])
+
+    # 3. Export Baseline
+    export_to_txt(fault_config["export_baseline"], frequencies, mag_baseline)
+
+    # 4. Generate and solve faulted network
+    if fault_config["active"]:
+        # Apply the fault strictly to a copy of the finalized baseline arrays
+        L_fault, Cg_fault, Cs_fault = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), fault_config)
+        mag_faulted = calculate_fra_dynamic(L_fault, Cg_fault, Cs_fault, frequencies)
+        
+        # Conditionally apply Stage 4 Measurement Noise to Faulted signal
+        if stochastic_config["apply_stage4_measurement_noise"]:
+            mag_faulted = add_measurement_noise(mag_faulted, noise_level=stochastic_config["noise_level_stage4"])
+            
+        # Export Faulted
+        export_to_txt(fault_config["export_faulted"], frequencies, mag_faulted)
+
+
