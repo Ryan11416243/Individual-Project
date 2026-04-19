@@ -112,7 +112,7 @@ def apply_fault(L_array, C_g_array, C_s_array, fault):
 # =========================================
 # Noise and Variation Application
 # =========================================
-def apply_stochastic_baseline(config, stoch_config):
+def apply_stochastic_baseline(config, stoch_config, fp_C=1.0, fp_L=1.0):
     """
     Implements the hybrid stochastic parameter variation (Table 1).
     Generates a unique transformer fingerprint (Stage 1) and adds 
@@ -124,6 +124,11 @@ def apply_stochastic_baseline(config, stoch_config):
     L_nom = config["L_air"] / n
     C_g_nom = config["C_g"] / n
     C_s_nom = config["C_s"] * n
+
+    # Freeze Parameters for each DNA batch
+    L_fp = L_nom * fp_L
+    C_g_fp = C_g_nom * fp_C
+    C_s_fp = C_s_nom * fp_C
     
     # ----------------------------------------------------
     # STAGE 1: Transformer Fingerprint (Inter-Unit Variability)
@@ -252,46 +257,48 @@ def export_to_txt(filename, freq_array, mag_array):
 # Run in Batches
 # ----------------------------------------------
 def generate_batch(num_sets, output_dir, file_prefix, active_config, stochastic_config, fault_config, frequencies):
-    """
-    Generates a batch of FRA datasets.
-    The first set (index 0) is forced to be the nominal/deterministic baseline.
-    Subsequent sets utilize the stochastic configurations.
-    """
-    # Ensure the output directory exists
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
+    # ==========================================
+    # NEW: FREEZE THE STAGE 1 FINGERPRINT FOR THIS BATCH
+    # ==========================================
+    if stochastic_config["apply_stage1_inter_unit"]:
+        batch_fp_C = np.random.normal(1.0, 0.05)  
+        batch_fp_L = np.random.normal(1.0, 0.035) 
+    else:
+        batch_fp_C, batch_fp_L = 1.0, 1.0
+
     for i in range(num_sets):
-        # Create a local copy of the stochastic config so we can safely modify it for the first run
         current_stoch_config = stochastic_config.copy()
         
-        # Force the first set to be purely nominal
         if i == 0:
-            print(f"\n--- Generating Set {i}: Pure Nominal Baseline ---")
-            current_stoch_config["apply_stage1_inter_unit"] = False
+            print(f"\n--- Generating Set {i}: Commissioning Baseline (Stage 1 Only) ---")
+            # Keep Stage 1 active (handled by our frozen variables), but turn off noise
             current_stoch_config["apply_stage2_intra_unit"] = False
             current_stoch_config["apply_stage4_measurement_noise"] = False 
+            current_fault_config = {"active": False} # Ensure no fault on baseline
         else:
-            print(f"--- Generating Set {i}: Stochastic Variation ---")
+            print(f"--- Generating Set {i}: Operational / Fault State ---")
+            current_fault_config = fault_config
 
-        # 1. Build Baseline Arrays
-        L_base, Cg_base, Cs_base = apply_stochastic_baseline(active_config, current_stoch_config)
+        # 1. Build Arrays using the FROZEN fingerprint
+        L_base, Cg_base, Cs_base = apply_stochastic_baseline(
+            active_config, current_stoch_config, fp_C=batch_fp_C, fp_L=batch_fp_L
+        )
         
-        # 2. Apply Faults (if active)
-        if fault_config["active"]:
-            L_net, Cg_net, Cs_net = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), fault_config)
+        # 2. Apply Faults (if active for this specific run)
+        if current_fault_config["active"]:
+            L_net, Cg_net, Cs_net = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), current_fault_config)
         else:
             L_net, Cg_net, Cs_net = L_base, Cg_base, Cs_base
 
-        # 3. Solve the Admittance Matrix
+        # 3. Solve & Noise
         mag_db = calculate_fra_dynamic(L_net, Cg_net, Cs_net, frequencies)
-
-        # 4. Apply Stage 4 Output Noise (if active in current config)
         if current_stoch_config["apply_stage4_measurement_noise"]:
             mag_db = add_measurement_noise(mag_db, noise_level=current_stoch_config["noise_level_stage4"])
 
-        # 5. Export to File
-        # Example output: "Healthy_Data/Healthy_Trace_0.txt"
+        # 4. Export
         filename = os.path.join(output_dir, f"{file_prefix}_{i}.txt")
         export_to_txt(filename, frequencies, mag_db)
 
