@@ -35,7 +35,7 @@ params_LV = {
 fleet_config = {
     # Define the TOTAL unique transformers you want per fault category (e.g., 90 Radial, 90 LCP)
     # The script will dynamically divide this number to prevent class imbalance.
-    "target_dnas_per_class": 90,  
+    "target_dnas_per_class": 30,  
     
     "batch_mode": "random",     # Options: "fixed" or "random"
     
@@ -427,7 +427,15 @@ def generate_batch(output_dir, file_prefix, active_config, stochastic_config, fa
             
             # 2. Apply Faults
             if current_fault_config["active"]:
-                L_net, Cg_net, Cs_net = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), current_fault_config)
+                L_net, Cg_net, Cs_net = apply_fault(
+                    L_array=L_base.copy(), 
+                    C_g_array=Cg_base.copy(), 
+                    C_s_array=Cs_base.copy(), 
+                    fault_type=current_fault_config["type"],
+                    severity_tier=current_fault_config["severity_tier"],
+                    units=current_fault_config["units_affected"],
+                    fault_subtype=current_fault_config.get("fault_subtype") # .get() prevents errors if it doesn't exist
+                )
             else:
                 L_net, Cg_net, Cs_net = L_base, Cg_base, Cs_base
 
@@ -441,6 +449,46 @@ def generate_batch(output_dir, file_prefix, active_config, stochastic_config, fa
             export_to_txt(filename_relative, frequencies, mag_db)
 
 
+# ========================================
+# Distribution of Location of faults
+# ========================================
+def get_locations_for_fault(fault_type, total_stages):
+        """
+        Uses Stratified Spatial Sampling to guarantee faults are distributed 
+        across the Top, Middle, and Bottom of the winding, preventing physical clumping.
+        """
+        if fault_type == "LCP":
+            return [list(range(total_stages))]
+            
+        locations = []
+        
+        # Define 3 physical strata (Top, Middle, Bottom)
+        z1_end = total_stages // 3
+        z2_end = 2 * (total_stages // 3)
+        
+        zones = [
+            (0, z1_end - 1),                  # Top Third (e.g., Units 0-4)
+            (z1_end, z2_end - 1),             # Middle Third (e.g., Units 5-9)
+            (z2_end, total_stages - 1)        # Bottom Third (e.g., Units 10-15)
+        ]
+        
+        for z_start, z_end in zones:
+            if fault_type == "Radial":
+                # Radials are bulges. Randomly decide if it's a 1-unit or 3-unit bulge.
+                size = random.choice([1, 3])
+                if size == 1:
+                    locations.append([random.randint(z_start, z_end)])
+                else:
+                    # Ensure a 3-unit bulge doesn't spill over the total transformer size
+                    safe_z_end = min(z_end, total_stages - 3)
+                    start_idx = random.randint(z_start, safe_z_end)
+                    locations.append([start_idx, start_idx + 1, start_idx + 2])
+                    
+            elif fault_type in ["Axial", "TTSC"]:
+                # Pick one random unit strictly within this specific zone
+                locations.append([random.randint(z_start, z_end)])
+                
+        return locations
 
 # =========================================
 # Test
@@ -545,17 +593,7 @@ if __name__ == "__main__":
     print("🚀 PHASE 2: GENERATING FAULT PERMUTATIONS (Dynamically Balanced)")
     print("="*50)
 
-    # Helper function to yield valid locations based on the report's rules
-    def get_locations_for_fault(fault_type, total_stages):
-        if fault_type == "Radial":
-            return [[3], [8, 9, 10]] 
-        elif fault_type == "Axial":
-            return [[1], [8], [14]]
-        elif fault_type == "LCP":
-            return [list(range(total_stages))]
-        elif fault_type == "TTSC":
-            return [[0], [7], [15]]
-        return [[0]]
+
 
     # Iterate through every combination
     for f_type in SEVERITY_RANGES.keys():
@@ -582,7 +620,7 @@ if __name__ == "__main__":
                 
                 output_folder = f"Dataset/Simulation_{f_type}_{severity}_Loc_{loc_str}"
                 
-                print(f"\n⚙️ CONFIGURING BATCH: {f_type} | {severity} | Location(s): {loc_str}")
+                print(f"\n CONFIGURING BATCH: {f_type} | {severity} | Location(s): {loc_str}")
                 print(f"   -> Allocating {dynamic_dnas_per_batch} DNAs to maintain class balance.")
                 
                 # Update Fault Config dynamically
