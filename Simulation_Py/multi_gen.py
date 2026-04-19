@@ -35,8 +35,8 @@ params_LV = {
 fleet_config = {
     # Define the TOTAL unique transformers you want per fault category (e.g., 90 Radial, 90 LCP)
     # The script will dynamically divide this number to prevent class imbalance.
-    "target_dnas_per_class": 30,  
-    
+    "target_dnas_per_class": 90,  
+
     "batch_mode": "random",     # Options: "fixed" or "random"
     
     # Settings for "fixed" mode:
