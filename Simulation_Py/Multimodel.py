@@ -199,3 +199,54 @@ for res in tuning_results:
     print(f"Optimal Parameters Found: {res['Best Params']}")
 
 print("\nAll experiments complete. Plots saved to disk.")
+
+# ==========================================
+# 6. EXPERIMENT 3: FLEET SCALABILITY (LEARNING CURVE)
+# ==========================================
+print("\n=== RUNNING EXPERIMENT 3: FLEET SCALABILITY ===")
+# We want to see how many UNIQUE transformers the ML needs to see before it understands the physics
+
+unique_train_groups = groups_train.unique()
+np.random.shuffle(unique_train_groups) # Shuffle to ensure random inclusion
+
+# Define how many units we want to test training on
+group_fractions = [0.1, 0.3, 0.5, 0.7, 1.0]
+scalability_results = []
+
+# Use Gradient Boosting for this test as it is robust and fast
+scaling_clf = GradientBoostingClassifier(random_state=42, n_estimators=100)
+
+for frac in group_fractions:
+    # Calculate how many unique transformers this fraction represents
+    num_groups_to_use = max(2, int(len(unique_train_groups) * frac)) 
+    selected_groups = unique_train_groups[:num_groups_to_use]
+    
+    # Filter the training data to ONLY include these specific transformers
+    mask = groups_train.isin(selected_groups)
+    X_train_subset = X_train_full[mask]
+    y_train_subset = y_train[mask]
+    
+    # Train the model on this restricted subset
+    scaling_clf.fit(X_train_subset, y_train_subset)
+    
+    # Test on the FULL, completely unseen testing set
+    test_acc = scaling_clf.score(X_test_full, y_test) * 100
+    
+    scalability_results.append({
+        "Unique Transformers in Train Set": num_groups_to_use,
+        "Test Accuracy (%)": test_acc
+    })
+    print(f"  -> Trained on {num_groups_to_use} unique units | Accuracy: {test_acc:.2f}%")
+
+# Plotting the Learning Curve
+scale_df = pd.DataFrame(scalability_results)
+plt.figure(figsize=(8, 5))
+sns.lineplot(x="Unique Transformers in Train Set", y="Test Accuracy (%)", 
+             data=scale_df, marker='o', linewidth=2, color='darkred')
+
+plt.title("Fleet Scalability: Generalization vs. Number of Unique Baselines")
+plt.xlabel("Number of Unique Transformers (Groups) in Training Data")
+plt.ylabel("Unseen Test Set Accuracy (%)")
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.savefig('Plot_3_Scalability_Curve.png', dpi=300)
