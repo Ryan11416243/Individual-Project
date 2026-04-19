@@ -112,25 +112,17 @@ def extract_features_single(freqs, mags, ref_mags, file_id):
 # ==========================================
 # 3. MAIN BATCH EXECUTION
 # ==========================================
+# ==========================================
+# 3. MAIN BATCH EXECUTION (UPDATED FOR LOCAL BASELINES)
+# ==========================================
 if __name__ == "__main__":
     
     # 1. Get absolute path of the script's directory
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     
-    # 2. Build the absolute path to the Golden Reference
-    baseline_filepath = os.path.join(SCRIPT_DIR, 'Simulation_Healthy', 'Trace_0.txt')
-    
-    if not os.path.exists(baseline_filepath):
-        print(f"Error: Golden baseline '{baseline_filepath}' not found.")
-        print("Please run your generation script first.")
-        exit()
-        
-    print(f"Loading golden reference from {baseline_filepath}...")
-    ref_freqs, ref_mags = read_sim_data(baseline_filepath)
-    
     all_rows = []
 
-    # 3. Iterate through configured directories using Absolute Paths
+    # 2. Iterate through configured directories
     for folder_name, (label, severity, fault_location) in DIR_CONFIG.items():
         
         # Resolve exactly where this folder should be
@@ -142,20 +134,36 @@ if __name__ == "__main__":
             
         print(f"Processing directory: {folder_name}...")
         
+        # ----------------------------------------------------
+        # NEW: LOAD THE SPECIFIC BASELINE FOR THIS BATCH
+        # ----------------------------------------------------
+        local_baseline_filepath = os.path.join(target_folder_path, 'Trace_0.txt')
+        
+        if not os.path.exists(local_baseline_filepath):
+            print(f"  -> Error: Local baseline '{local_baseline_filepath}' not found. Skipping folder.")
+            continue
+            
+        # Load the Stage 1 DNA to act as the reference for all other traces in this folder
+        ref_freqs, ref_mags = read_sim_data(local_baseline_filepath)
+        
         # Grab all .txt files in the directory
         txt_files = glob.glob(os.path.join(target_folder_path, '*.txt'))
         
-        if len(txt_files) == 0:
-            print(f"  -> Folder found, but no .txt files inside. Skipping.")
+        if len(txt_files) <= 1:
+            print(f"  -> Only baseline found in folder, no data runs to process. Skipping.")
             continue
             
         for filepath in txt_files:
             filename = os.path.basename(filepath)
             
-            # Read the target trace
+            # Skip the baseline itself so we don't feed the ML model perfect 0s
+            if filename == 'Trace_0.txt':
+                continue
+            
+            # Read the target trace (Stage 1 + Stage 2/3/4)
             freqs, mags = read_sim_data(filepath)
             
-            # Extract features against the baseline
+            # Extract features against its OWN baseline
             feature_row = extract_features_single(freqs, mags, ref_mags, filename)
             
             # Append Metadata
@@ -166,7 +174,7 @@ if __name__ == "__main__":
             
             all_rows.append(feature_row)
 
-    # 4. Build and format the final DataFrame
+    # 3. Build and format the final DataFrame
     if all_rows:
         master_dataset = pd.DataFrame(all_rows)
         
@@ -175,7 +183,7 @@ if __name__ == "__main__":
         remaining_cols = [c for c in master_dataset.columns if c not in front_cols]
         master_dataset = master_dataset[front_cols + remaining_cols]
         
-        # Export to CSV (also using absolute path for safety)
+        # Export to CSV 
         output_filepath = os.path.join(SCRIPT_DIR, OUTPUT_FILE)
         master_dataset.to_csv(output_filepath, index=False)
         
@@ -184,4 +192,4 @@ if __name__ == "__main__":
         print(f"\nSaved successfully as {output_filepath}")
         
     else:
-        print("\nNo data processed. Check your DIR_CONFIG and ensure the generated folders contain .txt files.")
+        print("\nNo data processed. Check your DIR_CONFIG and ensure the generated folders contain multiple .txt files.")
