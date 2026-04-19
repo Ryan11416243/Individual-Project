@@ -3,22 +3,18 @@ import pandas as pd
 import os
 import glob
 from scipy.signal import find_peaks
+import warnings
 
 # ==========================================
 # 1. CONFIGURATION SECTION
 # ==========================================
-# Instead of hardcoding every file, we map the directories we generated.
-# Format: 'Directory_Name': (True_Label, 'Severity', 'Location_of_fault')
 DIR_CONFIG = {
-    'Simulation_Healthy': (0, '0%', 'None'),
-    'Simulation_Radial':  (1, '10%', 'LV_Mid')  # Update severity/location based on your batch runs
+    'Simulation_Healthy':   (0, '0%', 'None'),
+    'Simulation_Radial_10': (1, '10%', 'LV_Mid')
 }
 
-# The nominal baseline we generated (Run 0 from the Healthy batch)
-BASELINE_FILE = os.path.join('Simulation_Py\Simulation_Healthy', 'Trace_0.txt')
 OUTPUT_FILE = 'Master_ML_Dataset.csv'
 
-# Frequency boundaries for sub-bands
 FREQ_BANDS = {
     'LF': (0, 10000),
     'MF': (10000, 100000),
@@ -26,39 +22,65 @@ FREQ_BANDS = {
 }
 
 # ==========================================
-# 2. CORE FUNCTIONS
+# 2. CORE FUNCTIONS (With Defensive Programming)
 # ==========================================
 
 def read_sim_data(filepath):
     """
-    Reads the clean tab-separated generated text files.
-    Returns frequencies and magnitudes as numpy arrays.
+    Reads tab-separated text files.
+    CS Feature: Explicit try-catch blocks and data validation.
     """
-    df = pd.read_csv(filepath, sep='\t')
-    # Column names match the export script: "Frequency(Hz)" and "Magnitude(dB)"
-    return df['Frequency(Hz)'].values, df['Magnitude(dB)'].values
+    try:
+        df = pd.read_csv(filepath, sep='\t')
+        
+        # Enforce strict column naming
+        if 'Frequency(Hz)' not in df.columns or 'Magnitude(dB)' not in df.columns:
+            raise KeyError(f"Missing required columns in {filepath}.")
+            
+        freqs = df['Frequency(Hz)'].values
+        mags = df['Magnitude(dB)'].values
+        
+        # Enforce data integrity (No NaNs or Infs allowed from the simulator)
+        if np.isnan(mags).any() or np.isinf(mags).any():
+            raise ValueError(f"Corrupted data (NaN/Inf) found in {filepath}.")
+            
+        return freqs, mags
+        
+    except Exception as e:
+        print(f"  [ERROR] Failed to read {filepath}: {e}")
+        return None, None
 
 def calculate_statistical_indices(ref_mag, fault_mag):
     """
-    Calculates CCF, LCC, SDA, SE, and CSD between a reference and a fault array.
+    Calculates statistical features with mathematical safeguards.
+    CS Feature: Zero-division protection and length assertions.
     """
+    assert len(ref_mag) == len(fault_mag), "Length mismatch between Reference and Fault arrays."
     n = len(ref_mag)
+    epsilon = 1e-12 # Prevent divide-by-zero errors in mathematically flat signals
     
     # 1. CCF (Cross-Correlation Factor)
-    ccf = np.corrcoef(ref_mag, fault_mag)[0, 1]
+    # Catch Constant Input Warnings which return NaN in correlation matrices
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ccf_matrix = np.corrcoef(ref_mag, fault_mag)
+        ccf = ccf_matrix[0, 1] if not np.isnan(ccf_matrix[0, 1]) else 0.0
     
-    # Pre-calculate means 
+    # Pre-calculate components
     mean_ref = np.mean(ref_mag)
     mean_fault = np.mean(fault_mag)
-    
-    # 2. LCC (Lin's Concordance Coefficient)
     var_ref = np.var(ref_mag) 
     var_fault = np.var(fault_mag) 
-    covar = np.cov(ref_mag, fault_mag, bias=True)[0, 1] 
-    lcc = (2 * covar) / ((mean_fault - mean_ref)**2 + var_fault + var_ref)
+    
+    # 2. LCC (Lin's Concordance Coefficient)
+    covar_matrix = np.cov(ref_mag, fault_mag, bias=True)
+    covar = covar_matrix[0, 1] if covar_matrix.ndim > 1 else 0.0
+    lcc_denominator = ((mean_fault - mean_ref)**2 + var_fault + var_ref)
+    lcc = (2 * covar) / (lcc_denominator + epsilon)
     
     # 3. SDA (Standard Difference Area)
-    sda = np.sum(np.abs(fault_mag - ref_mag)) / np.sum(np.abs(ref_mag))
+    sda_denominator = np.sum(np.abs(ref_mag))
+    sda = np.sum(np.abs(fault_mag - ref_mag)) / (sda_denominator + epsilon)
     
     # 4. SE (Sum of Errors)
     se = np.sum(fault_mag - ref_mag) / n
@@ -69,22 +91,19 @@ def calculate_statistical_indices(ref_mag, fault_mag):
     
     return ccf, lcc, sda, se, csd
 
-def extract_features_single(freqs, mags, ref_mags, file_id):
+def extract_features_single(freqs, mags, ref_mags, file_id, unit_id):
     """
-    Splits a single run into sub-bands, extracts statistical features, 
-    and identifies HF resonance peaks.
+    Splits a run into sub-bands and extracts features/peaks.
     """
-    # Create logical masks for frequency bands
     mask_lf = (freqs >= FREQ_BANDS['LF'][0]) & (freqs < FREQ_BANDS['LF'][1])
     mask_mf = (freqs >= FREQ_BANDS['MF'][0]) & (freqs <= FREQ_BANDS['MF'][1])
     mask_hf = (freqs > FREQ_BANDS['HF'][0])
     
-    # Calculate Statistical Indices per band
     ccf_lf, lcc_lf, sda_lf, se_lf, csd_lf = calculate_statistical_indices(ref_mags[mask_lf], mags[mask_lf])
     ccf_mf, lcc_mf, sda_mf, se_mf, csd_mf = calculate_statistical_indices(ref_mags[mask_mf], mags[mask_mf])
     ccf_hf, lcc_hf, sda_hf, se_hf, csd_hf = calculate_statistical_indices(ref_mags[mask_hf], mags[mask_hf])
     
-    # Extract Physical Features (Resonant Peaks in the HF band)
+    # Extract Physical Peaks (HF Band)
     hf_freqs = freqs[mask_hf]
     hf_mags = mags[mask_hf]
     peaks, _ = find_peaks(hf_mags, prominence=3) 
@@ -92,12 +111,11 @@ def extract_features_single(freqs, mags, ref_mags, file_id):
     peak_freqs = hf_freqs[peaks]
     peak_mags = hf_mags[peaks]
     
-    # Safely extract up to 5 peaks (pad with NaN if fewer exist)
     def safe_get(arr, idx):
         return arr[idx] if len(arr) > idx else np.nan
 
-    # Compile the feature row dictionary
     return {
+        'Unit_ID': unit_id,
         'Run_ID': file_id,
         'CCF_LF': ccf_lf, 'LCC_LF': lcc_lf, 'SDA_LF': sda_lf, 'SE_LF': se_lf, 'CSD_LF': csd_lf,
         'CCF_MF': ccf_mf, 'LCC_MF': lcc_mf, 'SDA_MF': sda_mf, 'SE_MF': se_mf, 'CSD_MF': csd_mf,
@@ -110,86 +128,108 @@ def extract_features_single(freqs, mags, ref_mags, file_id):
     }
 
 # ==========================================
-# 3. MAIN BATCH EXECUTION
+# 3. POST-EXTRACTION VALIDATOR SUITE
 # ==========================================
+def validate_ml_dataset(csv_path):
+    """
+    Asserts mathematical logic and physical expectations of the final dataset.
+    Protects against data leakage and silent calculation errors.
+    """
+    print(f"\n[VALIDATION] Verifying Dataset Integrity: {csv_path}")
+    df = pd.read_csv(csv_path)
+    
+    # CS CHECK 1: No NaNs in statistical indices
+    stat_columns = [col for col in df.columns if any(x in col for x in ['CCF', 'LCC', 'SDA', 'SE', 'CSD'])]
+    if df[stat_columns].isna().any().any():
+        raise AssertionError("FAIL: NaNs detected in statistical calculations. Check zero-division catches.")
+        
+    # CS CHECK 2: Mathematical Bounds
+    assert df['CCF_HF'].between(-1.0, 1.0).all(), "FAIL: CCF contains values outside [-1, 1]."
+    assert (df['SDA_HF'] >= 0).all(), "FAIL: SDA contains negative values (Mathematically impossible)."
+    assert (df['CSD_HF'] >= 0).all(), "FAIL: CSD contains negative values (Mathematically impossible)."
+
+    # FRA CHECK 1: Ensure Baseline Leakage Prevention
+    # The dataset should NEVER contain Trace_0.txt, as comparing a baseline to itself 
+    # yields perfect scores and destroys ML model training.
+    if (df['Run_ID'] == 'Trace_0.txt').any():
+        raise AssertionError("FAIL: Baseline 'Trace_0.txt' leaked into the final ML dataset.")
+
+    print("  [PASS] Mathematical Bounds Confirmed (-1 <= CCF <= 1, SDA/CSD >= 0).")
+    print("  [PASS] Zero-Division & NaN Safety Confirmed.")
+    print("  [PASS] Baseline Leakage successfully prevented.")
+    print("[VALIDATION COMPLETE] Dataset ready for Machine Learning.\n")
+
 # ==========================================
-# 3. MAIN BATCH EXECUTION (UPDATED FOR LOCAL BASELINES)
+# 4. MAIN EXECUTION
 # ==========================================
 if __name__ == "__main__":
     
-    # 1. Get absolute path of the script's directory
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    
     all_rows = []
 
-    # 2. Iterate through configured directories
     for folder_name, (label, severity, fault_location) in DIR_CONFIG.items():
-        
-        # Resolve exactly where this folder should be
         target_folder_path = os.path.join(SCRIPT_DIR, folder_name)
         
         if not os.path.exists(target_folder_path):
             print(f"Warning: Directory '{target_folder_path}' not found. Skipping.")
             continue
             
-        print(f"Processing directory: {folder_name}...")
+        print(f"Processing condition: {folder_name}...")
         
-        # ----------------------------------------------------
-        # NEW: LOAD THE SPECIFIC BASELINE FOR THIS BATCH
-        # ----------------------------------------------------
-        local_baseline_filepath = os.path.join(target_folder_path, 'Trace_0.txt')
+        # Navigate into the specific Unit subfolders (e.g., Unit_0, Unit_1)
+        unit_folders = glob.glob(os.path.join(target_folder_path, 'Unit_*'))
         
-        if not os.path.exists(local_baseline_filepath):
-            print(f"  -> Error: Local baseline '{local_baseline_filepath}' not found. Skipping folder.")
-            continue
+        for unit_path in unit_folders:
+            unit_name = os.path.basename(unit_path)
             
-        # Load the Stage 1 DNA to act as the reference for all other traces in this folder
-        ref_freqs, ref_mags = read_sim_data(local_baseline_filepath)
-        
-        # Grab all .txt files in the directory
-        txt_files = glob.glob(os.path.join(target_folder_path, '*.txt'))
-        
-        if len(txt_files) <= 1:
-            print(f"  -> Only baseline found in folder, no data runs to process. Skipping.")
-            continue
-            
-        for filepath in txt_files:
-            filename = os.path.basename(filepath)
-            
-            # Skip the baseline itself so we don't feed the ML model perfect 0s
-            if filename == 'Trace_0.txt':
+            # FRA Requirement: Enforce strict LOCAL baselines
+            local_baseline_path = os.path.join(unit_path, 'Trace_0.txt')
+            if not os.path.exists(local_baseline_path):
+                print(f"  -> Error: Local baseline missing in {unit_name}. Skipping unit.")
                 continue
+                
+            ref_freqs, ref_mags = read_sim_data(local_baseline_path)
+            if ref_freqs is None: continue # Skip if data was corrupted
             
-            # Read the target trace (Stage 1 + Stage 2/3/4)
-            freqs, mags = read_sim_data(filepath)
+            # Grab all sweeps for this specific unit
+            txt_files = glob.glob(os.path.join(unit_path, '*.txt'))
             
-            # Extract features against its OWN baseline
-            feature_row = extract_features_single(freqs, mags, ref_mags, filename)
-            
-            # Append Metadata
-            feature_row['Source_Directory'] = folder_name
-            feature_row['True_Label'] = label
-            feature_row['Severity'] = severity
-            feature_row['Location_of_fault'] = fault_location
-            
-            all_rows.append(feature_row)
+            for filepath in txt_files:
+                filename = os.path.basename(filepath)
+                
+                # Critical CS/FRA Rule: Never extract a baseline against itself
+                if filename == 'Trace_0.txt':
+                    continue
+                
+                freqs, mags = read_sim_data(filepath)
+                if freqs is None: continue
+                
+                # Extract features
+                feature_row = extract_features_single(freqs, mags, ref_mags, filename, unit_name)
+                
+                # Append Context Metadata
+                feature_row['Source_Condition'] = folder_name
+                feature_row['True_Label'] = label
+                feature_row['Severity'] = severity
+                feature_row['Location_of_fault'] = fault_location
+                
+                all_rows.append(feature_row)
 
-    # 3. Build and format the final DataFrame
+    # 4. Final Compile and Export
     if all_rows:
         master_dataset = pd.DataFrame(all_rows)
         
-        # Reorder columns to put metadata at the front
-        front_cols = ['Source_Directory', 'Run_ID', 'True_Label', 'Severity', 'Location_of_fault']
+        # Organize columns nicely
+        front_cols = ['Source_Condition', 'Unit_ID', 'Run_ID', 'True_Label', 'Severity', 'Location_of_fault']
         remaining_cols = [c for c in master_dataset.columns if c not in front_cols]
         master_dataset = master_dataset[front_cols + remaining_cols]
         
-        # Export to CSV 
         output_filepath = os.path.join(SCRIPT_DIR, OUTPUT_FILE)
         master_dataset.to_csv(output_filepath, index=False)
+        print(f"\nExtraction complete. Saved to {output_filepath}")
         
-        print("\nExtraction Complete. Preview:")
-        print(master_dataset.head())
-        print(f"\nSaved successfully as {output_filepath}")
+        # 5. Run the strict CS/FRA Validation Suite
+        validate_ml_dataset(output_filepath)
         
     else:
-        print("\nNo data processed. Check your DIR_CONFIG and ensure the generated folders contain multiple .txt files.")
+        print("\nNo data processed. Ensure DIR_CONFIG matches generated folders.")
