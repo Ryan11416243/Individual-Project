@@ -205,7 +205,8 @@ if __name__ == "__main__":
                 if freqs is None: continue
                 
                 # Extract features
-                feature_row = extract_features_single(freqs, mags, ref_mags, filename, unit_name)
+                global_unit_id = f"{folder_name}_{unit_name}"
+                feature_row = extract_features_single(freqs, mags, ref_mags, filename, global_unit_id)
                 
                 # Append Context Metadata
                 feature_row['Source_Condition'] = folder_name
