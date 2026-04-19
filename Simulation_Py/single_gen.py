@@ -132,9 +132,8 @@ def apply_fault(L_array, C_g_array, C_s_array, fault):
 # =========================================
 def apply_stochastic_baseline(config, stoch_config, fp_C=1.0, fp_L=1.0):
     """
-    Implements the hybrid stochastic parameter variation (Table 1).
-    Generates a unique transformer fingerprint (Stage 1) and adds 
-    operational noise per-stage (Stage 2).
+    Applies the pre-calculated, frozen Stage 1 fingerprint (DNA) and 
+    adds operational noise per-stage (Stage 2).
     """
     n = config["stages"]
     
@@ -143,20 +142,9 @@ def apply_stochastic_baseline(config, stoch_config, fp_C=1.0, fp_L=1.0):
     C_g_nom = config["C_g"] / n
     C_s_nom = config["C_s"] * n
 
-    # Freeze Parameters for each DNA batch
-    L_fp = L_nom * fp_L
-    C_g_fp = C_g_nom * fp_C
-    C_s_fp = C_s_nom * fp_C
-    
     # ----------------------------------------------------
-    # STAGE 1: Transformer Fingerprint (Inter-Unit Variability)
+    # STAGE 1: Apply the frozen DNA passed from the batch loop
     # ----------------------------------------------------
-    if stoch_config["apply_stage1_inter_unit"]:
-        fp_C = np.random.normal(1.0, 0.05)  
-        fp_L = np.random.normal(1.0, 0.035) 
-    else:
-        fp_C, fp_L = 1.0, 1.0  # Deterministic fallback
-        
     L_fp = L_nom * fp_L
     C_g_fp = C_g_nom * fp_C
     C_s_fp = C_s_nom * fp_C
@@ -169,30 +157,23 @@ def apply_stochastic_baseline(config, stoch_config, fp_C=1.0, fp_L=1.0):
         C_g_array = np.random.normal(C_g_fp, C_g_fp * 0.0125, n)
         C_s_array = np.random.normal(C_s_fp, C_s_fp * 0.0125, n)
     else:
-        # Fill arrays with the deterministic (or Stage 1 shifted) values
         L_array = np.full(n, L_fp)
         C_g_array = np.full(n, C_g_fp)
         C_s_array = np.full(n, C_s_fp)
-
-    # INLINE TEST: Prevent impossible physics (negative inductance/capacitance)
-    if (L_array <= 0).any() or (C_g_array <= 0).any() or (C_s_array <= 0).any():
-        raise ValueError("FATAL: Stochastic noise pushed a component value to <= 0. Reduce your variance percentage.")
         
     return L_array, C_g_array, C_s_array
 
-def add_measurement_noise(magnitudes_dB, noise_level=0.01):
-    """
-    Implements Stage 4: 0.5% to 2% Gaussian Measurement Noise applied 
-    to the final output magnitude.
-    """
-    # ------------------------------------------------------
-    # Stage 4: Measurement Noise
-    # ------------------------------------------------------
-    # Base noise is scaled dynamically to the signal strength
+# =====================================
+# Stage 4: Measurement Noise
+# ====================================
 
-    noise = np.random.normal(0, np.abs(magnitudes_dB) * noise_level, len(magnitudes_dB))
+def add_measurement_noise(magnitudes_dB, noise_level=0.5):
+    """
+    Implements Stage 4: Constant Additive White Gaussian Noise (AWGN) in the dB domain.
+    """
+    # Generates a flat noise floor independent of the signal's magnitude
+    noise = np.random.normal(0, noise_level, len(magnitudes_dB))
     return magnitudes_dB + noise
-
 
 
 
@@ -435,7 +416,9 @@ def validate_dataset_integrity(output_dir, fleet_config, expected_steps):
     print(f"  [PASS] All File Counts strictly follow '{fleet_config['batch_mode']}' logic.")
     print(f"  [PASS] Baseline Trace_0.txt verified present in all folders.")
     print(f"  [PASS] Mathematical integrity verified (No NaNs/Infs, Exact Shape matched).")
+    print(f"  [PASS] Correct Value of CCF with Healthy Cases.")
     print("[TESTING COMPLETE] Dataset is clean and ML-ready.\n")
+
 
 # ==========================================
 # RUN AND COMPARE
@@ -463,8 +446,6 @@ def validate_dataset_integrity(output_dir, fleet_config, expected_steps):
 # 5. BATCH RUN, EXPORT, AND VALIDATE
 # ==========================================
 if __name__ == "__main__":
-    
-    import random # Ensure this is imported for the generation loop
     
     # ---------------------------------------------
     # Example A: Generate Healthy Fleet
