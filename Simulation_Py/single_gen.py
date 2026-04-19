@@ -69,6 +69,34 @@ stochastic_config = {
     "noise_level_stage4": 0.01              # 1% standard deviation for Stage 4
 }
 
+
+# ==========================================
+# SEVERITY DICTIONARY 
+# ==========================================
+# Values represent the multiplier range. Example: +2% to +5% = (1.02, 1.05)
+SEVERITY_RANGES = {
+    "Radial": {
+        "Incipient": (1.02, 1.05),
+        "Moderate": (1.05, 1.12),
+        "Severe": (1.10, 1.25)
+    },
+    "Axial": { # Note: Decreases
+        "Incipient": (0.97, 0.99),
+        "Moderate": (0.90, 0.97),
+        "Severe": (0.80, 0.90)
+    },
+    "LCP": { # Note: Decreases
+        "Incipient": (0.97, 0.99),
+        "Moderate": (0.93, 0.97),
+        "Severe": (0.88, 0.93)
+    },
+    "TTSC": { # Note: Decreases
+        "Incipient": (0.97, 0.99),  # ~1 turn
+        "Moderate": (0.92, 0.97),   # 2-5 turns
+        "Severe": (0.80, 0.92)      # >5 turns
+    }
+}
+
 # General Setup
 active_config = params_LV 
 R_load = 50.0             
@@ -126,6 +154,8 @@ def apply_fault(L_array, C_g_array, C_s_array, fault):
         print(f"Applied {fault['type']} fault across unit(s): {applied_units}.")
         
     return L_array, C_g_array, C_s_array
+
+
 
 # =========================================
 # Noise and Variation Application
@@ -439,9 +469,7 @@ def validate_dataset_integrity(output_dir, fleet_config, expected_steps):
 #    export_to_txt(fault_config["export_faulted"], frequencies, mag_faulted)
 
 
-# ==========================================
-# 5. BATCH RUN AND EXPORT
-# ==========================================
+
 # ==========================================
 # 5. BATCH RUN, EXPORT, AND VALIDATE
 # ==========================================
@@ -483,7 +511,7 @@ if __name__ == "__main__":
     fault_config["C_g_multiplier"] = 1.10 
     
     # Override fleet config to test "fixed" mode
-    fleet_config["num_dnas"] = 2
+    fleet_config["num_dnas"] = 3
     fleet_config["batch_mode"] = "fixed"
     fleet_config["fixed_batches"] = 5
     
