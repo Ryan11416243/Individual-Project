@@ -562,11 +562,24 @@ if __name__ == "__main__":
     
     TARGET_DNAS = fleet_config["target_dnas_per_class"]
     
+
+    # Purge Old data
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    master_dataset_dir = os.path.join(script_dir, "Dataset")
+    
+    if os.path.exists(master_dataset_dir):
+        print(f"\n XXX INITIATING MASTER PURGE: Deleting old data in '{master_dataset_dir}'...")
+        shutil.rmtree(master_dataset_dir)
+        
+    # Recreate the empty master directory
+    os.makedirs(master_dataset_dir)
+
+
     # ---------------------------------------------
     # 1. Generate Healthy Baseline Fleet
     # ---------------------------------------------
     print("\n" + "="*50)
-    print(f"🚀 PHASE 1: GENERATING HEALTHY BASELINE FLEET (Target: {TARGET_DNAS} Units)")
+    print(f" PHASE 1: GENERATING HEALTHY BASELINE FLEET (Target: {TARGET_DNAS} Units)")
     print("="*50)
     
     fault_config["active"] = False
@@ -590,7 +603,7 @@ if __name__ == "__main__":
     # 2. Automated Fault Permutation Engine
     # ---------------------------------------------
     print("\n" + "="*50)
-    print("🚀 PHASE 2: GENERATING FAULT PERMUTATIONS (Dynamically Balanced)")
+    print(" PHASE 2: GENERATING FAULT PERMUTATIONS (Dynamically Balanced)")
     print("="*50)
 
 
