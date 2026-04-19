@@ -33,15 +33,18 @@ params_LV = {
 
 # --- FLEET & BATCH CONFIGURATION ---
 fleet_config = {
-    "num_dnas": 5,              # How many unique transformers to generate
+    # Define the TOTAL unique transformers you want per fault category (e.g., 90 Radial, 90 LCP)
+    # The script will dynamically divide this number to prevent class imbalance.
+    "target_dnas_per_class": 90,  
+    
     "batch_mode": "random",     # Options: "fixed" or "random"
     
     # Settings for "fixed" mode:
-    "fixed_batches": 10,        # Every transformer gets exactly 10 sweeps (1 baseline + 9 operational/fault)
+    "fixed_batches": 5,         # Every transformer gets exactly 5 sweeps
     
-    # Settings for "random" mode:
-    "random_range": (3, 12),    # Each transformer gets a random number of sweeps between 3 and 12
-    "random_distribution": "uniform" # Options: "uniform" (equal chance) or "normal" (bell curve clustering)
+    # Settings for "random" mode (Kept small to prevent massive file bloat):
+    "random_range": (2, 5),     
+    "random_distribution": "uniform" 
 }
 
 
@@ -505,44 +508,24 @@ def validate_dataset_integrity(output_dir, fleet_config, expected_steps):
 
 
 # ==========================================
-# RUN AND COMPARE
-# ==========================================
-# Generate baseline network
-# _base, Cg_base, Cs_base = build_network_arrays(active_config)
-# mag_baseline = calculate_fra_dynamic(L_base, Cg_base, Cs_base, frequencies)
-
-# EXPORT BASELINE
-# export_to_txt(fault_config["export_baseline"], frequencies, mag_baseline)
-
-# Generate and solve faulted network
-# if fault_config["active"]:
-#    L_fault, Cg_fault, Cs_fault = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), fault_config)
-#    mag_faulted = calculate_fra_dynamic(L_fault, Cg_fault, Cs_fault, frequencies)
-    
-    # EXPORT FAULTED
-#    export_to_txt(fault_config["export_faulted"], frequencies, mag_faulted)
-
-
-
-# ==========================================
 # 5. BATCH RUN, EXPORT, AND VALIDATE
 # ==========================================
 if __name__ == "__main__":
     
-    # Define how many unique transformers (DNAs) to generate per sub-class
-    FLEET_SIZE_PER_CLASS = 10 
-    fleet_config["num_dnas"] = FLEET_SIZE_PER_CLASS
-    fleet_config["batch_mode"] = "random" # Generates varying historical sweeps per unit
+    TARGET_DNAS = fleet_config["target_dnas_per_class"]
     
     # ---------------------------------------------
     # 1. Generate Healthy Baseline Fleet
     # ---------------------------------------------
     print("\n" + "="*50)
-    print("🚀 PHASE 1: GENERATING HEALTHY BASELINE FLEET")
+    print(f"🚀 PHASE 1: GENERATING HEALTHY BASELINE FLEET (Target: {TARGET_DNAS} Units)")
     print("="*50)
     
     fault_config["active"] = False
     output_target_healthy = "Dataset/Simulation_Healthy"
+    
+    # Healthy only has 1 "permutation", so it gets the full target amount
+    fleet_config["num_dnas"] = TARGET_DNAS 
     
     generate_batch(
         output_dir=output_target_healthy, 
@@ -559,49 +542,59 @@ if __name__ == "__main__":
     # 2. Automated Fault Permutation Engine
     # ---------------------------------------------
     print("\n" + "="*50)
-    print("🚀 PHASE 2: GENERATING FAULT PERMUTATIONS")
+    print("🚀 PHASE 2: GENERATING FAULT PERMUTATIONS (Dynamically Balanced)")
     print("="*50)
 
     # Helper function to yield valid locations based on the report's rules
     def get_locations_for_fault(fault_type, total_stages):
         if fault_type == "Radial":
-            # Parabolic spread across 1 to 3 units. Let's test a 1-unit and a 3-unit cluster.
             return [[3], [8, 9, 10]] 
         elif fault_type == "Axial":
-            # Single-gap at different boundaries (Top, Middle, Bottom)
             return [[1], [8], [14]]
         elif fault_type == "LCP":
-            # Global fault: affects all units simultaneously
             return [list(range(total_stages))]
         elif fault_type == "TTSC":
-            # Highly localized to a single unit
             return [[0], [7], [15]]
         return [[0]]
 
     # Iterate through every combination
     for f_type in SEVERITY_RANGES.keys():
-        for severity in ["Incipient", "Moderate", "Severe"]:
-            locations = get_locations_for_fault(f_type, active_config["stages"])
-            
+        
+        # ---------------------------------------------------------
+        # CS DYNAMIC BALANCING LOGIC
+        # ---------------------------------------------------------
+        locations = get_locations_for_fault(f_type, active_config["stages"])
+        severities = ["Incipient", "Moderate", "Severe"]
+        
+        # Calculate how many sub-folders this fault type will create
+        total_permutations = len(severities) * len(locations)
+        
+        # Divide target DNAs by permutations so all classes sum up to the same total size
+        dynamic_dnas_per_batch = max(2, int(TARGET_DNAS / total_permutations))
+        fleet_config["num_dnas"] = dynamic_dnas_per_batch
+        
+        for severity in severities:
             for loc in locations:
-                # Format folder name to ensure uniqueness (e.g., Dataset/Radial_Moderate_Loc_8-9-10)
+                
                 loc_str = "-".join(map(str, loc))
                 if f_type == "LCP": 
-                    loc_str = "Global" # Cleaner folder name for LCP
+                    loc_str = "Global" 
                 
                 output_folder = f"Dataset/Simulation_{f_type}_{severity}_Loc_{loc_str}"
                 
-                print(f"\n CONFIGURING BATCH: {f_type} | {severity} | Location(s): {loc_str}")
+                print(f"\n⚙️ CONFIGURING BATCH: {f_type} | {severity} | Location(s): {loc_str}")
+                print(f"   -> Allocating {dynamic_dnas_per_batch} DNAs to maintain class balance.")
                 
                 # Update Fault Config dynamically
                 current_fault_config = fault_config.copy()
                 current_fault_config["active"] = True
                 current_fault_config["type"] = f_type
                 current_fault_config["units_affected"] = loc
-                
-                # Since 'apply_fault' now calculates the multiplier dynamically based on severity,
-                # we pass the severity tier string into the config so apply_fault can use it.
                 current_fault_config["severity_tier"] = severity 
+
+                # Set sub-type for Axial faults (Since your apply_fault expects it now)
+                if f_type == "Axial":
+                    current_fault_config["fault_subtype"] = "Single-Gap"
 
                 # Run Generation
                 generate_batch(
@@ -618,4 +611,3 @@ if __name__ == "__main__":
                 validate_dataset_integrity(output_folder, fleet_config, STEPS)
                 
     print("\n✅ MASTER DATASET GENERATION COMPLETE.")
-
