@@ -14,7 +14,7 @@ from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold, Ran
 # 1. CONFIGURATION & FEATURE SETS
 # ==========================================
 CLASSES_TO_INCLUDE = [0, 1, 2, 3, 4] 
-SEVERITIES_TO_INCLUDE = ['0%', '5%', '10%', '20%']
+SEVERITIES_TO_INCLUDE = ['0%', 'Incipient', 'Moderate', 'Severe']
 
 ALL_FEATURES = [
     'CCF_LF', 'LCC_LF', 'SDA_LF', 'SE_LF', 'CSD_LF',
