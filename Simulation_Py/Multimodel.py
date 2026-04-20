@@ -33,6 +33,18 @@ FEATURE_EXPERIMENTS = {
     "Resonant Peaks Only": [f for f in ALL_FEATURES if 'Peak' in f]
 }
 
+
+# DATASET SUBSAMPLING (WIDTH & DEPTH)
+# Isolate variables without relying on new physical simulations.
+SUBSAMPLE_DATA = True
+
+# WIDTH: How many unique transformers (DNAs) per fault class? (e.g., limit to 100)
+MAX_DNAS_PER_CLASS = 150 
+
+# DEPTH: How many historical sweeps per transformer? (e.g., limit to 2)
+MAX_SWEEPS_PER_DNA = 3
+
+
 # ==========================================
 # 2. DATA PREPARATION
 # ==========================================
@@ -40,7 +52,7 @@ print("Loading dataset...")
 df = pd.read_csv('Simulation_Py/Master_ML_Dataset.csv')
 
 df['Severity'] = df['Severity'].fillna('0%').astype(str).str.strip()
-df.fillna(-1, inplace=True) # CS Fix: Explicitly flag missing peaks as -1
+df.fillna(-1, inplace=True) # Explicitly flag missing peaks as -1
 
 df = df[df['True_Label'].isin(CLASSES_TO_INCLUDE)]
 df = df[df['Severity'].isin(SEVERITIES_TO_INCLUDE)]
@@ -48,14 +60,58 @@ df = df[df['Severity'].isin(SEVERITIES_TO_INCLUDE)]
 y = df['True_Label']
 groups = df['Unit_ID']
 
-# Safe Group Split for Final Testing
+# ---------------------------------------------------------
+# STEP 1: FREEZE THE TEST SET FIRST
+# We lock away a massive, unseen 20% of the data. 
+# This Test Set will NEVER be reduced, ensuring a fair baseline.
+# ---------------------------------------------------------
 gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
 train_idx, test_idx = next(gss.split(df, y, groups=groups))
 
-df_train = df.iloc[train_idx]
-df_test = df.iloc[test_idx]
+df_train = df.iloc[train_idx].copy()
+df_test = df.iloc[test_idx].copy()
 y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 groups_train = groups.iloc[train_idx]
+
+print(f"[DATA SPLIT] Massive Test Vault Frozen: {df_test['Unit_ID'].nunique()} Unique Transformers.")
+
+# ---------------------------------------------------------
+# STEP 2: STRATIFIED SUBSAMPLING ON TRAINING DATA ONLY
+# ---------------------------------------------------------
+if SUBSAMPLE_DATA:
+    print(f"[DATA PREP] Subsampling Training Set -> Width: {MAX_DNAS_PER_CLASS}/class | Depth: {MAX_SWEEPS_PER_DNA}/DNA")
+    filtered_dfs = []
+    np.random.seed(42) 
+
+    for label, class_df in df_train.groupby('True_Label'):
+        unique_locations = class_df['Location_of_fault'].unique()
+        dnas_per_loc = max(1, MAX_DNAS_PER_CLASS // len(unique_locations))
+        
+        for loc in unique_locations:
+            loc_df = class_df[class_df['Location_of_fault'] == loc]
+            unique_dnas_in_loc = loc_df['Unit_ID'].unique()
+            
+            # WIDTH: Extract evenly from each physical location
+            if len(unique_dnas_in_loc) > dnas_per_loc:
+                selected_dnas = np.random.choice(unique_dnas_in_loc, dnas_per_loc, replace=False)
+            else:
+                selected_dnas = unique_dnas_in_loc
+                
+            width_filtered_df = loc_df[loc_df['Unit_ID'].isin(selected_dnas)]
+            
+            # DEPTH: Randomly sample sweeps instead of sequentially grabbing the top (FRA Fix)
+            # We use lambda to sample safely (in case a unit has fewer sweeps than MAX_SWEEPS)
+            depth_filtered_df = width_filtered_df.groupby('Unit_ID').apply(
+                lambda x: x.sample(n=min(len(x), MAX_SWEEPS_PER_DNA), random_state=42)
+            ).reset_index(drop=True)
+            
+            filtered_dfs.append(depth_filtered_df)
+        
+    # Reassemble the Training Set
+    df_train = pd.concat(filtered_dfs).reset_index(drop=True)
+    y_train = df_train['True_Label']
+    groups_train = df_train['Unit_ID']
+    print(f"  -> Training Subsampling complete. Train Shape: {df_train.shape} | Test Shape: {df_test.shape}\n")
 
 # Cross-Validation Strategy for Tuning
 # ==========================================
