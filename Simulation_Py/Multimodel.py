@@ -65,8 +65,17 @@ groups = df['Unit_ID']
 # We lock away a massive, unseen 20% of the data. 
 # This Test Set will NEVER be reduced, ensuring a fair baseline.
 # ---------------------------------------------------------
-gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-train_idx, test_idx = next(gss.split(df, y, groups=groups))
+# StratifiedGroupKFold gives us a single fold where:
+# - No Unit_ID leaks across train/test
+# - Class proportions are approximately preserved in both splits
+sgkf_split = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
+train_idx, test_idx = next(sgkf_split.split(df, y, groups=groups))
+
+# Sanity check — print class distribution in both splits
+print("[DATA SPLIT] Class distribution in TEST set:")
+print(y.iloc[test_idx].value_counts().sort_index())
+print("[DATA SPLIT] Class distribution in TRAIN set:")
+print(y.iloc[train_idx].value_counts().sort_index())
 
 df_train = df.iloc[train_idx].copy()
 df_test = df.iloc[test_idx].copy()
@@ -100,7 +109,7 @@ if SUBSAMPLE_DATA:
             width_filtered_df = loc_df[loc_df['Unit_ID'].isin(selected_dnas)]
             
             # DEPTH: Randomly sample sweeps instead of sequentially grabbing the top (FRA Fix)
-            # We use lambda to sample safely (in case a unit has fewer sweeps than MAX_SWEEPS)
+            # lambda to sample safely (in case a unit has fewer sweeps than MAX_SWEEPS)
             depth_filtered_df = width_filtered_df.groupby('Unit_ID').apply(
                 lambda x: x.sample(n=min(len(x), MAX_SWEEPS_PER_DNA), random_state=42)
             ).reset_index(drop=True)
@@ -256,53 +265,99 @@ for res in tuning_results:
 
 print("\nAll experiments complete. Plots saved to disk.")
 
+
 # ==========================================
-# 6. EXPERIMENT 3: FLEET SCALABILITY (LEARNING CURVE)
+# 6. EXPERIMENT 3: WIDTH VS. DEPTH
 # ==========================================
-print("\n=== RUNNING EXPERIMENT 3: FLEET SCALABILITY ===")
-# We want to see how many UNIQUE transformers the ML needs to see before it understands the physics
+print("\n=== RUNNING EXPERIMENT 3: WIDTH VS. DEPTH SCALABILITY ===")
+# Test how the model responds to more unique units (Width) 
+# versus more historical sweeps per unit (Depth).
 
-unique_train_groups = groups_train.unique()
-np.random.shuffle(unique_train_groups) # Shuffle to ensure random inclusion
+test_widths = [25, 50, 100, 150, 200]  # Number of unique DNAs per class
+test_depths = [1, 2, 3, 4, 5]             # Number of historical sweeps per DNA
 
-# Define how many units we want to test training on
-group_fractions = [0.1, 0.3, 0.5, 0.7, 1.0]
-scalability_results = []
+# Random Forest for this as it is fast and handles imputed data perfectly
+matrix_clf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
 
-# Use Gradient Boosting for this test as it is robust and fast
-scaling_clf = GradientBoostingClassifier(random_state=42, n_estimators=100)
+heatmap_data = np.zeros((len(test_depths), len(test_widths)))
 
-for frac in group_fractions:
-    # Calculate how many unique transformers this fraction represents
-    num_groups_to_use = max(2, int(len(unique_train_groups) * frac)) 
-    selected_groups = unique_train_groups[:num_groups_to_use]
-    
-    # Filter the training data to ONLY include these specific transformers
-    mask = groups_train.isin(selected_groups)
-    X_train_subset = X_train_full[mask]
-    y_train_subset = y_train[mask]
-    
-    # Train the model on this restricted subset
-    scaling_clf.fit(X_train_subset, y_train_subset)
-    
-    # Test on the FULL, completely unseen testing set
-    test_acc = scaling_clf.score(X_test_full, y_test) * 100
-    
-    scalability_results.append({
-        "Unique Transformers in Train Set": num_groups_to_use,
-        "Test Accuracy (%)": test_acc
-    })
-    print(f"  -> Trained on {num_groups_to_use} unique units | Accuracy: {test_acc:.2f}%")
+df_train_raw = df.iloc[train_idx].copy()   # full, unsubsampled training population
+y_train_raw = y.iloc[train_idx]
+groups_train_raw = groups.iloc[train_idx]
 
-# Plotting the Learning Curve
-scale_df = pd.DataFrame(scalability_results)
-plt.figure(figsize=(8, 5))
-sns.lineplot(x="Unique Transformers in Train Set", y="Test Accuracy (%)", 
-             data=scale_df, marker='o', linewidth=2, color='darkred')
+# Then in Experiment 3, replace df_train with df_train_raw:
+for i, depth in enumerate(test_depths):
+    for j, width in enumerate(test_widths):
+        filtered_dfs = []
+        
+        for label, class_df in df_train_raw.groupby('True_Label'):  # <-- raw data
+            all_dnas = class_df['Unit_ID'].unique()
+            
+            if len(all_dnas) > width:
+                selected_dnas = np.random.choice(all_dnas, width, replace=False)
+            else:
+                selected_dnas = all_dnas
+            
+            width_filtered_df = class_df[class_df['Unit_ID'].isin(selected_dnas)]
+            
+            depth_filtered_df = (
+                width_filtered_df
+                .groupby('Unit_ID', group_keys=False)
+                .apply(lambda x: x.sample(n=min(len(x), depth), random_state=42))
+                .reset_index(drop=True)
+            )
+            filtered_dfs.append(depth_filtered_df)
+        
+        # Apply the exact same Stratified Subsampling logic, but using our loop variables
+        for label, class_df in df_train.groupby('True_Label'):
+            # Get ALL unique DNAs for this class regardless of location
+            all_dnas = class_df['Unit_ID'].unique()
+            
+            # WIDTH: Sample exactly MAX_DNAS_PER_CLASS units directly,
+            # not indirectly via location — this guarantees equal class width
+            if len(all_dnas) > MAX_DNAS_PER_CLASS:
+                selected_dnas = np.random.choice(all_dnas, MAX_DNAS_PER_CLASS, replace=False)
+            else:
+                selected_dnas = all_dnas
+                print(f"  [WARNING] Class {label} only has {len(all_dnas)} DNAs "
+                    f"(less than MAX_DNAS_PER_CLASS={MAX_DNAS_PER_CLASS})")
+            
+            width_filtered_df = class_df[class_df['Unit_ID'].isin(selected_dnas)]
+            
+            # DEPTH: Sample randomly per DNA, not sequentially
+            depth_filtered_df = (
+                width_filtered_df
+                .groupby('Unit_ID', group_keys=False)
+                .apply(lambda x: x.sample(n=min(len(x), MAX_SWEEPS_PER_DNA), random_state=42))
+                .reset_index(drop=True)
+            )
+            
+            filtered_dfs.append(depth_filtered_df)
 
-plt.title("Fleet Scalability: Generalization vs. Number of Unique Baselines")
-plt.xlabel("Number of Unique Transformers (Groups) in Training Data")
-plt.ylabel("Unseen Test Set Accuracy (%)")
-plt.grid(True, linestyle='--', alpha=0.7)
+        # Verify the result is balanced
+        df_train = pd.concat(filtered_dfs).reset_index(drop=True)
+        print("\n[SUBSAMPLING] Final training samples per class:")
+        print(df_train['True_Label'].value_counts().sort_index())
+        
+        # Assemble the specific training subset for this Grid coordinate
+        df_subset = pd.concat(filtered_dfs).reset_index(drop=True)
+        X_train_sub = df_subset[ALL_FEATURES]
+        y_train_sub = df_subset['True_Label']
+        
+        # Train and Evaluate on the Frozen Vault
+        matrix_clf.fit(X_train_sub, y_train_sub)
+        acc = matrix_clf.score(X_test_full, y_test) * 100
+        
+        heatmap_data[i, j] = acc
+        print(f"  -> Width: {width} DNAs/Class | Depth: {depth} Sweeps/DNA | Acc: {acc:.2f}%")
+
+# Plotting the 2D Heatmap
+plt.figure(figsize=(10, 6))
+sns.heatmap(heatmap_data, annot=True, fmt=".1f", cmap="YlGnBu", 
+            xticklabels=test_widths, yticklabels=test_depths, cbar_kws={'label': 'Test Accuracy (%)'})
+
+plt.title("Data Scalability Matrix: Fleet Width vs. Historical Depth")
+plt.xlabel("Width: Unique Transformers (DNAs) per Class")
+plt.ylabel("Depth: Historical Sweeps per Transformer")
 plt.tight_layout()
-plt.savefig('Plot_3_Scalability_Curve.png', dpi=300)
+plt.savefig('Plot_3_Width_vs_Depth.png', dpi=300)
