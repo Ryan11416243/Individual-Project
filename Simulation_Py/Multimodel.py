@@ -9,7 +9,8 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold, RandomizedSearchCV
-
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import classification_report
 # ==========================================
 # 1. CONFIGURATION & FEATURE SETS
 # ==========================================
@@ -110,9 +111,12 @@ if SUBSAMPLE_DATA:
             
             # DEPTH: Randomly sample sweeps instead of sequentially grabbing the top (FRA Fix)
             # lambda to sample safely (in case a unit has fewer sweeps than MAX_SWEEPS)
-            depth_filtered_df = width_filtered_df.groupby('Unit_ID').apply(
-                lambda x: x.sample(n=min(len(x), MAX_SWEEPS_PER_DNA), random_state=42)
-            ).reset_index(drop=True)
+            depth_filtered_df = (
+                width_filtered_df
+                .groupby('Unit_ID', group_keys=False)
+                .apply(lambda x: x.sample(n=min(len(x), MAX_SWEEPS_PER_DNA), random_state=42))
+                .reset_index(drop=True)
+            )
             
             filtered_dfs.append(depth_filtered_df)
         
@@ -121,6 +125,8 @@ if SUBSAMPLE_DATA:
     y_train = df_train['True_Label']
     groups_train = df_train['Unit_ID']
     print(f"  -> Training Subsampling complete. Train Shape: {df_train.shape} | Test Shape: {df_test.shape}\n")
+    print("\n[SUBSAMPLING] Unique DNAs per class in training set:")
+    print(df_train.groupby('True_Label')['Unit_ID'].nunique())
 
 # Cross-Validation Strategy for Tuning
 # ==========================================
@@ -266,6 +272,48 @@ for res in tuning_results:
 print("\nAll experiments complete. Plots saved to disk.")
 
 
+
+# ============================================
+# Plot 4 Confusion Matrix
+# ============================================
+
+
+best_model = best_models["Gradient Boosting"]
+y_pred = best_model.predict(X_test_full)
+cm = confusion_matrix(y_test, y_pred)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[f"Class {i}" for i in range(5)])
+fig, ax = plt.subplots(figsize=(8, 6))
+disp.plot(ax=ax, cmap='Blues', colorbar=False)
+plt.title("Gradient Boosting — Confusion Matrix (Unseen Test Set)")
+plt.tight_layout()
+plt.savefig('Plot_4_Confusion_Matrix.png', dpi=300)
+print("\n=== PER-CLASS CLASSIFICATION REPORT (Gradient Boosting) ===")
+print(classification_report(y_test, y_pred, target_names=[f"Class {i}" for i in range(5)]))
+
+# ============================================
+# Plot 5
+# ============================================
+
+cm_norm = confusion_matrix(y_test, y_pred, normalize='true')
+disp_norm = ConfusionMatrixDisplay(confusion_matrix=cm_norm, 
+                                    display_labels=[f"Class {i}" for i in range(5)])
+fig, ax = plt.subplots(figsize=(8, 6))
+disp_norm.plot(ax=ax, cmap='Blues', colorbar=False)
+plt.title("Gradient Boosting — Normalised Confusion Matrix (Recall)")
+plt.tight_layout()
+plt.savefig('Plot_4b_Confusion_Normalised.png', dpi=300)
+
+misclassified_mask = y_pred != y_test.values
+misclassified_df = df_test.copy()
+misclassified_df['Predicted'] = y_pred
+misclassified_df = misclassified_df[misclassified_mask]
+
+print("\n=== MISCLASSIFICATION SEVERITY BREAKDOWN ===")
+print(misclassified_df[misclassified_df['True_Label'].isin([0,1,2])]
+      .groupby(['True_Label', 'Severity'])
+      .size()
+      .rename('Count'))
+
 # ==========================================
 # 6. EXPERIMENT 3: WIDTH VS. DEPTH
 # ==========================================
@@ -303,41 +351,12 @@ for i, depth in enumerate(test_depths):
             depth_filtered_df = (
                 width_filtered_df
                 .groupby('Unit_ID', group_keys=False)
-                .apply(lambda x: x.sample(n=min(len(x), depth), random_state=42))
+                .apply(lambda x: x.sample(n=min(len(x), depth), random_state=42), include_groups=False)
                 .reset_index(drop=True)
             )
             filtered_dfs.append(depth_filtered_df)
         
         # Apply the exact same Stratified Subsampling logic, but using our loop variables
-        for label, class_df in df_train.groupby('True_Label'):
-            # Get ALL unique DNAs for this class regardless of location
-            all_dnas = class_df['Unit_ID'].unique()
-            
-            # WIDTH: Sample exactly MAX_DNAS_PER_CLASS units directly,
-            # not indirectly via location — this guarantees equal class width
-            if len(all_dnas) > MAX_DNAS_PER_CLASS:
-                selected_dnas = np.random.choice(all_dnas, MAX_DNAS_PER_CLASS, replace=False)
-            else:
-                selected_dnas = all_dnas
-                print(f"  [WARNING] Class {label} only has {len(all_dnas)} DNAs "
-                    f"(less than MAX_DNAS_PER_CLASS={MAX_DNAS_PER_CLASS})")
-            
-            width_filtered_df = class_df[class_df['Unit_ID'].isin(selected_dnas)]
-            
-            # DEPTH: Sample randomly per DNA, not sequentially
-            depth_filtered_df = (
-                width_filtered_df
-                .groupby('Unit_ID', group_keys=False)
-                .apply(lambda x: x.sample(n=min(len(x), MAX_SWEEPS_PER_DNA), random_state=42))
-                .reset_index(drop=True)
-            )
-            
-            filtered_dfs.append(depth_filtered_df)
-
-        # Verify the result is balanced
-        df_train = pd.concat(filtered_dfs).reset_index(drop=True)
-        print("\n[SUBSAMPLING] Final training samples per class:")
-        print(df_train['True_Label'].value_counts().sort_index())
         
         # Assemble the specific training subset for this Grid coordinate
         df_subset = pd.concat(filtered_dfs).reset_index(drop=True)
