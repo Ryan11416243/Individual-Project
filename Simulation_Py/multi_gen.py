@@ -15,6 +15,9 @@ STEPS = 2000
 NO_OF_HEALTHY = 5
 NO_OF_FAULT = 5
 
+C_SHIFT = 0.000125
+L_SHIFT = 0.00005
+
 # Base parameters (from Cheng et al.)
 params_HV = {
     "stages": N_HV,
@@ -35,12 +38,12 @@ params_LV = {
 fleet_config = {
     # Define the TOTAL unique transformers you want per fault category (e.g., 90 Radial, 90 LCP)
     # The script will dynamically divide this number to prevent class imbalance.
-    "target_dnas_per_class": 300,  
+    "target_dnas_per_class": 1000,  
 
     "batch_mode": "fixed",     # Options: "fixed" or "random"
     
     # Settings for "fixed" mode:
-    "fixed_batches": 6,         # Every transformer gets exactly 5 sweeps
+    "fixed_batches": 8,         # Every transformer gets exactly 5 sweeps
     
     # Settings for "random" mode (Kept small to prevent massive file bloat):
     "random_range": (2, 5),     
@@ -240,9 +243,23 @@ def apply_stochastic_baseline(config, stoch_config, fp_C=1.0, fp_L=1.0):
     # STAGE 2: Operational Variation (Intra-Unit Noise)
     # ----------------------------------------------------
     if stoch_config["apply_stage2_intra_unit"]:
-        L_array = np.random.normal(L_fp, L_fp * 0.0075, n)
-        C_g_array = np.random.normal(C_g_fp, C_g_fp * 0.0125, n)
-        C_s_array = np.random.normal(C_s_fp, C_s_fp * 0.0125, n)
+        
+        # 1. Correlated Global Shift (The Physics)
+        # The entire transformer winding heats up/ages together. 
+        # We generate ONE random multiplier for this specific sweep.
+        global_C_shift = np.random.normal(1.0, C_SHIFT) # +/- 1.25% global drift
+        global_L_shift = np.random.normal(1.0, L_SHIFT)  # Inductance drifts less
+        
+        # 2. Uncorrelated Micro-Noise
+        # A tiny independent variance per-unit to prevent perfect mathematical flatness
+        micro_C_noise = 0.001  # 0.1% independent noise
+        micro_L_noise = 0.0005 # 0.05% independent noise
+
+        # 3. Apply the global shift, then add the micro-noise array
+        L_array = np.random.normal(L_fp * global_L_shift, L_fp * micro_L_noise, n)
+        C_g_array = np.random.normal(C_g_fp * global_C_shift, C_g_fp * micro_C_noise, n)
+        C_s_array = np.random.normal(C_s_fp * global_C_shift, C_s_fp * micro_C_noise, n)
+        
     else:
         L_array = np.full(n, L_fp)
         C_g_array = np.full(n, C_g_fp)

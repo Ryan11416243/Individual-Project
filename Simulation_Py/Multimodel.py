@@ -11,6 +11,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold, RandomizedSearchCV
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from sklearn.metrics import classification_report
+from sklearn.impute import KNNImputer
+from sklearn.preprocessing import StandardScaler
+
+
+
 # ==========================================
 # 1. CONFIGURATION & FEATURE SETS
 # ==========================================
@@ -20,15 +25,17 @@ SEVERITIES_TO_INCLUDE = ['0%', 'Incipient', 'Moderate', 'Severe']
 ALL_FEATURES = [
     'CCF_LF', 'LCC_LF', 'SDA_LF', 'SE_LF', 'CSD_LF',
     'CCF_MF', 'LCC_MF', 'SDA_MF', 'SE_MF', 'CSD_MF',
-    'CCF_HF', 'LCC_HF', 'SDA_HF', 'SE_HF', 'CSD_HF',
-    'Peak_1_Hz', 'Peak_2_Hz', 'Peak_3_Hz', 'Peak_4_Hz', 'Peak_5_Hz',
-    'Peak_1_dB', 'Peak_2_dB', 'Peak_3_dB', 'Peak_4_dB', 'Peak_5_dB',
+    'SDA_Win1', 'CCF_Win1', 'CSD_Win1', 'Delta_Peak_1_Hz', 'Delta_Peak_1_dB',
+    'SDA_Win2', 'CCF_Win2', 'CSD_Win2', 'Delta_Peak_2_Hz', 'Delta_Peak_2_dB',
+    'SDA_Win3', 'CCF_Win3', 'CSD_Win3', 'Delta_Peak_3_Hz', 'Delta_Peak_3_dB',
+    'SDA_Win4', 'CCF_Win4', 'CSD_Win4', 'Delta_Peak_4_Hz', 'Delta_Peak_4_dB',
+    'SDA_Win5', 'CCF_Win5', 'CSD_Win5', 'Delta_Peak_5_Hz', 'Delta_Peak_5_dB',
 ]
 
 # FRA EXPERIMENT: We define specific physical subsets to test
 FEATURE_EXPERIMENTS = {
     "All Features": ALL_FEATURES,
-    "High-Freq & Peaks (Capacitive)": [f for f in ALL_FEATURES if 'HF' in f or 'Peak' in f],
+    "High-Freq & Peaks (Capacitive)": [f for f in ALL_FEATURES if 'Win' in f or 'Peak' in f],
     "Low & Mid-Freq (Core/Inductive)": [f for f in ALL_FEATURES if 'LF' in f or 'MF' in f],
     "Statistical Indices Only": [f for f in ALL_FEATURES if 'Peak' not in f],
     "Resonant Peaks Only": [f for f in ALL_FEATURES if 'Peak' in f]
@@ -40,10 +47,10 @@ FEATURE_EXPERIMENTS = {
 SUBSAMPLE_DATA = True
 
 # WIDTH: How many unique transformers (DNAs) per fault class? (e.g., limit to 100)
-MAX_DNAS_PER_CLASS = 150 
+MAX_DNAS_PER_CLASS = 200 
 
 # DEPTH: How many historical sweeps per transformer? (e.g., limit to 2)
-MAX_SWEEPS_PER_DNA = 3
+MAX_SWEEPS_PER_DNA = 7
 
 
 # ==========================================
@@ -52,8 +59,12 @@ MAX_SWEEPS_PER_DNA = 3
 print("Loading dataset...")
 df = pd.read_csv('Simulation_Py/Master_ML_Dataset.csv')
 
+df['Location_of_fault'] = df['Location_of_fault'].fillna('Global').astype(str)
+
 df['Severity'] = df['Severity'].fillna('0%').astype(str).str.strip()
-df.fillna(-1, inplace=True) # Explicitly flag missing peaks as -1
+
+
+
 
 df = df[df['True_Label'].isin(CLASSES_TO_INCLUDE)]
 df = df[df['Severity'].isin(SEVERITIES_TO_INCLUDE)]
@@ -165,7 +176,7 @@ for exp_name, features in FEATURE_EXPERIMENTS.items():
 # Plotting Feature Ablation
 ablation_df = pd.DataFrame(ablation_results).sort_values(by="Accuracy", ascending=False)
 plt.figure(figsize=(10, 6))
-sns.barplot(x="Accuracy", y="Feature Set", data=ablation_df, palette="magma")
+sns.barplot(x="Accuracy", y="Feature Set", data=ablation_df, palette="magma", legend=False)
 plt.title("FRA Feature Ablation: Where is the Diagnostic Signal?")
 plt.xlabel("Cross-Validation Accuracy (%)")
 plt.tight_layout()
@@ -180,14 +191,18 @@ X_train_full = df_train[ALL_FEATURES]
 X_test_full = df_test[ALL_FEATURES]
 
 # Define Pipelines (Scaling is required for SVM)
+# imputer for  
 pipelines = {
     "Random Forest": Pipeline([
+        ('imputer', KNNImputer(n_neighbors=5)),
         ('classifier', RandomForestClassifier(random_state=42, class_weight='balanced'))
     ]),
     "Gradient Boosting": Pipeline([
+        ('imputer', KNNImputer(n_neighbors=5)),
         ('classifier', GradientBoostingClassifier(random_state=42))
     ]),
     "SVM (RBF)": Pipeline([
+        ('imputer', KNNImputer(n_neighbors=5)),
         ('scaler', StandardScaler()),
         ('classifier', SVC(random_state=42))
     ])
@@ -380,3 +395,23 @@ plt.xlabel("Width: Unique Transformers (DNAs) per Class")
 plt.ylabel("Depth: Historical Sweeps per Transformer")
 plt.tight_layout()
 plt.savefig('Plot_3_Width_vs_Depth.png', dpi=300)
+
+
+# ==========================================
+# 7. EXPERIMENT 4: SEVERITY THRESHOLD ANALYSIS
+# ==========================================
+print("\n=== RUNNING EXPERIMENT 4: MODERATE/SEVERE ISOLATION ===")
+# How well does the model perform if we ignore "Incipient" faults 
+# that naturally overlap with healthy manufacturing variance?
+
+# Filter the test set to only include Healthy (0%), Moderate, and Severe
+# We drop 'Incipient' from the test evaluation
+mask_clear_faults = df_test['Severity'].isin(['0%', 'Moderate', 'Severe'])
+X_test_clear = df_test[mask_clear_faults][ALL_FEATURES]
+y_test_clear = df_test[mask_clear_faults]['True_Label']
+
+best_gb = best_models["Gradient Boosting"]
+clear_acc = best_gb.score(X_test_clear, y_test_clear) * 100
+
+print(f"  -> Accuracy on Full Test Set: {best_gb.score(X_test_full, y_test) * 100:.2f}%")
+print(f"  -> Accuracy excluding 'Incipient' overlaps: {clear_acc:.2f}%")

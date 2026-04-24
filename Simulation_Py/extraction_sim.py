@@ -96,7 +96,7 @@ def calculate_statistical_indices(ref_mag, fault_mag):
 
 def extract_features_single(freqs, mags, ref_mags, file_id, unit_id):
     """
-    Splits a run into sub-bands and extracts features/peaks.
+    Splits a run into sub-bands and extracts features/peaks using Windowed Maxima.
     """
     mask_lf = (freqs >= FREQ_BANDS['LF'][0]) & (freqs < FREQ_BANDS['LF'][1])
     mask_mf = (freqs >= FREQ_BANDS['MF'][0]) & (freqs <= FREQ_BANDS['MF'][1])
@@ -106,29 +106,59 @@ def extract_features_single(freqs, mags, ref_mags, file_id, unit_id):
     ccf_mf, lcc_mf, sda_mf, se_mf, csd_mf = calculate_statistical_indices(ref_mags[mask_mf], mags[mask_mf])
     ccf_hf, lcc_hf, sda_hf, se_hf, csd_hf = calculate_statistical_indices(ref_mags[mask_hf], mags[mask_hf])
     
-    # Extract Physical Peaks (HF Band)
-    hf_freqs = freqs[mask_hf]
-    hf_mags = mags[mask_hf]
-    peaks, _ = find_peaks(hf_mags, prominence=3) 
+    # ---------------------------------------------------------
+    # NEW LOGIC: Windowed Maxima Peak Extraction
+    # ---------------------------------------------------------
+    # Define the 5 static frequency windows
+    windows = [
+        (100000, 250000),  # Window 1
+        (250000, 400000),  # Window 2
+        (400000, 600000),  # Window 3
+        (600000, 800000),  # Window 4
+        (800000, 1000000)  # Window 5
+    ]
     
-    peak_freqs = hf_freqs[peaks]
-    peak_mags = hf_mags[peaks]
+    peak_features = {}
     
-    def safe_get(arr, idx):
-        return arr[idx] if len(arr) > idx else np.nan
-
-    return {
+    for i, (f_min, f_max) in enumerate(windows):
+        window_mask = (freqs >= f_min) & (freqs < f_max)
+        window_freqs = freqs[window_mask]
+        window_mags = mags[window_mask]
+        ref_window_mags = ref_mags[window_mask]
+        
+        if len(window_mags) > 0:
+            # 1. Surgical Sub-Band Statistics
+            ccf, lcc, sda, se, csd = calculate_statistical_indices(ref_window_mags, window_mags)
+            peak_features[f'SDA_Win{i+1}'] = sda
+            peak_features[f'CCF_Win{i+1}'] = ccf
+            peak_features[f'CSD_Win{i+1}'] = csd
+            
+            # 2. Delta Peaks
+            max_idx_fault = np.argmax(window_mags)
+            max_idx_ref = np.argmax(ref_window_mags)
+            peak_features[f'Delta_Peak_{i+1}_Hz'] = window_freqs[max_idx_fault] - window_freqs[max_idx_ref]
+            peak_features[f'Delta_Peak_{i+1}_dB'] = window_mags[max_idx_fault] - ref_window_mags[max_idx_ref]
+        else:
+            peak_features[f'SDA_Win{i+1}'] = 0.0
+            peak_features[f'CCF_Win{i+1}'] = 0.0
+            peak_features[f'CSD_Win{i+1}'] = 0.0
+            peak_features[f'Delta_Peak_{i+1}_Hz'] = 0.0
+            peak_features[f'Delta_Peak_{i+1}_dB'] = 0.0
+    # ---------------------------------------------------------
+    
+    # Return the dictionary (combining stats and the new peak dictionary)
+    base_features = {
         'Unit_ID': unit_id,
         'Run_ID': file_id,
         'CCF_LF': ccf_lf, 'LCC_LF': lcc_lf, 'SDA_LF': sda_lf, 'SE_LF': se_lf, 'CSD_LF': csd_lf,
         'CCF_MF': ccf_mf, 'LCC_MF': lcc_mf, 'SDA_MF': sda_mf, 'SE_MF': se_mf, 'CSD_MF': csd_mf,
         'CCF_HF': ccf_hf, 'LCC_HF': lcc_hf, 'SDA_HF': sda_hf, 'SE_HF': se_hf, 'CSD_HF': csd_hf,
-        'Peak_1_Hz': safe_get(peak_freqs, 0), 'Peak_1_dB': safe_get(peak_mags, 0),
-        'Peak_2_Hz': safe_get(peak_freqs, 1), 'Peak_2_dB': safe_get(peak_mags, 1),
-        'Peak_3_Hz': safe_get(peak_freqs, 2), 'Peak_3_dB': safe_get(peak_mags, 2),
-        'Peak_4_Hz': safe_get(peak_freqs, 3), 'Peak_4_dB': safe_get(peak_mags, 3),
-        'Peak_5_Hz': safe_get(peak_freqs, 4), 'Peak_5_dB': safe_get(peak_mags, 4)
     }
+    
+    # Merge the dictionaries
+    base_features.update(peak_features)
+    
+    return base_features
 
 # ==========================================
 # 3. POST-EXTRACTION VALIDATOR SUITE
