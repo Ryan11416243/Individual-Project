@@ -4,6 +4,9 @@ import os
 import glob
 from scipy.signal import find_peaks
 import warnings
+import random
+
+from Simulation_Py.experiment5 import MAX_FILES_PER_CLASS
 
 # ==========================================
 # 1. CONFIGURATION SECTION
@@ -24,6 +27,8 @@ FREQ_BANDS = {
     'MF': (10000, 100000),
     'HF': (100000, float('inf'))
 }
+
+
 
 # ==========================================
 # 2. CORE FUNCTIONS (With Defensive Programming)
@@ -138,12 +143,20 @@ def extract_features_single(freqs, mags, ref_mags, file_id, unit_id):
             max_idx_ref = np.argmax(ref_window_mags)
             peak_features[f'Delta_Peak_{i+1}_Hz'] = window_freqs[max_idx_fault] - window_freqs[max_idx_ref]
             peak_features[f'Delta_Peak_{i+1}_dB'] = window_mags[max_idx_fault] - ref_window_mags[max_idx_ref]
+
+            # 3. Sub-Band Spectral Energy (Trapezoidal Integration)
+            energy_ref = np.trapezoid(np.abs(ref_window_mags), window_freqs)
+            energy_fault = np.trapezoid(np.abs(window_mags), window_freqs)
+            peak_features[f'Delta_Energy_Win{i+1}'] = energy_fault - energy_ref
+
+
         else:
             peak_features[f'SDA_Win{i+1}'] = 0.0
             peak_features[f'CCF_Win{i+1}'] = 0.0
             peak_features[f'CSD_Win{i+1}'] = 0.0
             peak_features[f'Delta_Peak_{i+1}_Hz'] = 0.0
             peak_features[f'Delta_Peak_{i+1}_dB'] = 0.0
+            peak_features[f'Delta_Energy_Win{i+1}'] = 0.0
     # ---------------------------------------------------------
     
     # Return the dictionary (combining stats and the new peak dictionary)
@@ -233,6 +246,9 @@ if __name__ == "__main__":
         # ---------------------------------------------------------
         # DATA EXTRACTION LOOP
         # ---------------------------------------------------------
+
+        # Grab all folders, then randomly shuffle them before picking 20
+        # Grab absolutely every unit folder to build the Master CSV
         unit_folders = glob.glob(os.path.join(target_folder_path, 'Unit_*'))
         
         for unit_path in unit_folders:
