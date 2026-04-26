@@ -9,7 +9,7 @@ import shutil
 # CONFIGURATION BLOCK
 # ==========================================
 N_HV = 10
-N_LV = 16
+N_LV = 74
 STEPS = 2000
 
 NO_OF_HEALTHY = 5
@@ -100,6 +100,7 @@ SEVERITY_RANGES = {
 # General Setup
 active_config = params_LV 
 R_load = 50.0             
+R_source = 50.0
 V_in = 1.0                
 frequencies = np.logspace(np.log10(10), np.log10(1e6), STEPS)
 
@@ -213,6 +214,7 @@ def add_measurement_noise(magnitudes_dB, noise_level=0.5):
 def calculate_fra_dynamic(L_array, C_g_array, C_s_array, frequencies):
     """
     Builds and solves the Nodal Admittance Matrix using component arrays.
+    Updated to include an R_source (50 ohm) at the power injection node.
     """
     n = len(L_array)
     magnitudes_dB = []
@@ -221,33 +223,34 @@ def calculate_fra_dynamic(L_array, C_g_array, C_s_array, frequencies):
         omega = 2 * np.pi * f
         
         # 1. Calculate Admittance Arrays for this frequency
-        # Y_s[i] is the series admittance connecting Node(i-1) to Node(i)
         Y_s = 1 / (1j * omega * L_array) + (1j * omega * C_s_array)
-        # Y_g[i] is the shunt admittance from Node(i) to Ground
         Y_g = 1j * omega * C_g_array
         Y_load = 1 / R_load
+        Y_source = 1 / R_source  # Admittance of the new source resistor
         
-        # 2. Build the N x N Matrix
-        Y_bus = np.zeros((n, n), dtype=complex)
+        # 2. Build the (N+1) x (N+1) Matrix
+        # Node 0 is the Input Terminal. Nodes 1 to N are the internal/output nodes.
+        N_nodes = n + 1
+        Y_bus = np.zeros((N_nodes, N_nodes), dtype=complex)
         
-        for i in range(n):
+        for i in range(N_nodes):
             if i == 0:
-                # Node 1: Connects to Vin via Y_s[0], and Node 2 via Y_s[1]
-                Y_bus[i, i] = Y_s[0] + Y_s[1] + Y_g[0]
-                Y_bus[i, i+1] = -Y_s[1]
-            elif i == n - 1:
-                # Node N: Connects to Node N-1 via Y_s[n-1], and to Load
-                Y_bus[i, i] = Y_s[i] + Y_g[i] + Y_load
-                Y_bus[i, i-1] = -Y_s[i]
+                # Node 0: Input Terminal (Connects Source to Stage 1)
+                Y_bus[i, i] = Y_source + Y_s[0]
+                Y_bus[i, i+1] = -Y_s[0]
+            elif i == N_nodes - 1:
+                # Node N: Last Output Node (Connects to Load)
+                Y_bus[i, i] = Y_s[n-1] + Y_g[n-1] + Y_load
+                Y_bus[i, i-1] = -Y_s[n-1]
             else:
-                # Intermediate Nodes
-                Y_bus[i, i] = Y_s[i] + Y_s[i+1] + Y_g[i]
-                Y_bus[i, i-1] = -Y_s[i]
-                Y_bus[i, i+1] = -Y_s[i+1]
+                # Intermediate Nodes (1 through N-1)
+                Y_bus[i, i] = Y_s[i-1] + Y_s[i] + Y_g[i-1]
+                Y_bus[i, i-1] = -Y_s[i-1]
+                Y_bus[i, i+1] = -Y_s[i]
                 
         # 3. Current Vector
-        I_vector = np.zeros(n, dtype=complex)
-        I_vector[0] = Y_s[0] * V_in 
+        I_vector = np.zeros(N_nodes, dtype=complex)
+        I_vector[0] = Y_source * V_in  # Current injection from the physical source
         
         # 4. Solve
         try:
@@ -255,9 +258,13 @@ def calculate_fra_dynamic(L_array, C_g_array, C_s_array, frequencies):
         except np.linalg.LinAlgError:
             raise RuntimeError(f"FATAL: Matrix became singular at {f} Hz. Check component values for short circuits.")
 
+        # V_nodes[0] is the measured voltage at the input terminal
+        # V_nodes[-1] is the measured voltage at the output terminal
+        V_terminal_in = V_nodes[0]
         V_out = V_nodes[-1]
         
-        magnitudes_dB.append(20 * np.log10(abs(V_out / V_in)))
+        # Plotting V_out against the terminal voltage mimics real equipment
+        magnitudes_dB.append(20 * np.log10(abs(V_out / V_terminal_in)))
 
 
     return magnitudes_dB
@@ -454,79 +461,79 @@ def validate_dataset_integrity(output_dir, fleet_config, expected_steps):
 # RUN AND COMPARE
 # ==========================================
 # Generate baseline network
-# _base, Cg_base, Cs_base = build_network_arrays(active_config)
-# mag_baseline = calculate_fra_dynamic(L_base, Cg_base, Cs_base, frequencies)
+L_base, Cg_base, Cs_base = build_network_arrays(active_config)
+mag_baseline = calculate_fra_dynamic(L_base, Cg_base, Cs_base, frequencies)
 
-# EXPORT BASELINE
-# export_to_txt(fault_config["export_baseline"], frequencies, mag_baseline)
 
-# Generate and solve faulted network
-# if fault_config["active"]:
-#    L_fault, Cg_fault, Cs_fault = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), fault_config)
-#    mag_faulted = calculate_fra_dynamic(L_fault, Cg_fault, Cs_fault, frequencies)
+export_to_txt(fault_config["export_baseline"], frequencies, mag_baseline)
+
+
+if fault_config["active"]:
+   L_fault, Cg_fault, Cs_fault = apply_fault(L_base.copy(), Cg_base.copy(), Cs_base.copy(), fault_config)
+   mag_faulted = calculate_fra_dynamic(L_fault, Cg_fault, Cs_fault, frequencies)
     
-    # EXPORT FAULTED
-#    export_to_txt(fault_config["export_faulted"], frequencies, mag_faulted)
+
+   export_to_txt(fault_config["export_faulted"], frequencies, mag_faulted)
 
 
 
 # ==========================================
 # 5. BATCH RUN, EXPORT, AND VALIDATE
 # ==========================================
-if __name__ == "__main__":
+# if __name__ == "__main__":
     
-    # ---------------------------------------------
-    # Example A: Generate Healthy Fleet
-    # ---------------------------------------------
-    print("STARTING HEALTHY FLEET GENERATION...")
-    fault_config["active"] = False
+#     # ---------------------------------------------
+#     # Example A: Generate Healthy Fleet
+#     # ---------------------------------------------
+#     print("STARTING HEALTHY FLEET GENERATION...")
+#     fault_config["active"] = False
     
-    # Override fleet config for this specific run
-    fleet_config["num_dnas"] = 3
-    fleet_config["batch_mode"] = "random"
+#     # Override fleet config for this specific run
+#     fleet_config["num_dnas"] = 3
+#     fleet_config["batch_mode"] = "random"
     
-    output_target_healthy = "Simulation_Healthy"
+#     output_target_healthy = "Simulation_Healthy"
     
-    generate_batch(
-        output_dir=output_target_healthy, 
-        file_prefix="Trace",             
-        active_config=active_config, 
-        stochastic_config=stochastic_config, 
-        fault_config=fault_config,
-        fleet_config=fleet_config,
-        frequencies=frequencies
-    )
+#     generate_batch(
+#         output_dir=output_target_healthy, 
+#         file_prefix="Trace",             
+#         active_config=active_config, 
+#         stochastic_config=stochastic_config, 
+#         fault_config=fault_config,
+#         fleet_config=fleet_config,
+#         frequencies=frequencies
+#     )
     
-    # IMMEDIATELY TEST WHAT WE JUST BUILT
-    validate_dataset_integrity(output_target_healthy, fleet_config, STEPS)
+#     # IMMEDIATELY TEST WHAT WE JUST BUILT
+#     validate_dataset_integrity(output_target_healthy, fleet_config, STEPS)
 
 
-    # ---------------------------------------------
-    # Example B: Generate Radial Fault Dataset (10% Severity)
-    # ---------------------------------------------
-    print("STARTING RADIAL FAULT BATCH GENERATION...")
-    fault_config["active"] = True
-    fault_config["type"] = "Radial"
-    fault_config["units_affected"] = [3]  
-    fault_config["C_g_multiplier"] = 1.10 
+#     # ---------------------------------------------
+#     # Example B: Generate Radial Fault Dataset (10% Severity)
+#     # ---------------------------------------------
+#     print("STARTING RADIAL FAULT BATCH GENERATION...")
+#     fault_config["active"] = True
+#     fault_config["type"] = "Radial"
+#     fault_config["units_affected"] = [3]  
+#     fault_config["C_g_multiplier"] = 1.10 
     
-    # Override fleet config to test "fixed" mode
-    fleet_config["num_dnas"] = 3
-    fleet_config["batch_mode"] = "fixed"
-    fleet_config["fixed_batches"] = 5
+#     # Override fleet config to test "fixed" mode
+#     fleet_config["num_dnas"] = 3
+#     fleet_config["batch_mode"] = "fixed"
+#     fleet_config["fixed_batches"] = 5
     
-    output_target_radial = "Simulation_Radial_10"
+#     output_target_radial = "Simulation_Radial_10"
     
-    generate_batch(
-        output_dir=output_target_radial, 
-        file_prefix="Trace", 
-        active_config=active_config, 
-        stochastic_config=stochastic_config, 
-        fault_config=fault_config, 
-        fleet_config=fleet_config,
-        frequencies=frequencies
-    )
+#     generate_batch(
+#         output_dir=output_target_radial, 
+#         file_prefix="Trace", 
+#         active_config=active_config, 
+#         stochastic_config=stochastic_config, 
+#         fault_config=fault_config, 
+#         fleet_config=fleet_config,
+#         frequencies=frequencies
+#     )
     
-    # IMMEDIATELY TEST WHAT WE JUST BUILT
-    validate_dataset_integrity(output_target_radial, fleet_config, STEPS)
+#     # IMMEDIATELY TEST WHAT WE JUST BUILT
+#     validate_dataset_integrity(output_target_radial, fleet_config, STEPS)
 

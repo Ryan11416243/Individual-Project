@@ -13,14 +13,22 @@ from extraction_sim import extract_features_single, read_sim_data, CLASS_LABELS
 from Multimodel import ALL_FEATURES
 
 # ==========================================
-# 1. FAST-TRAIN THE CHAMPION MODEL
+# 1. FAST-TRAIN THE CHAMPION MODEL (LEAKAGE-FREE)
 # ==========================================
 print("Loading Master Dataset for training...")
-df = pd.read_csv('Simulation_Py/Master_ML_Dataset.csv')
+df = pd.read_csv('Simulation_PY/Master_ML_Dataset.csv')
 
-# Train on the clean baseline data
-X_train = df[ALL_FEATURES]
-y_train = df['True_Label']
+# REPLICATE THE EXACT SPLIT FROM MULTIMODEL.PY
+from sklearn.model_selection import StratifiedGroupKFold
+sgkf_split = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
+train_idx, test_idx = next(sgkf_split.split(df, df['True_Label'], groups=df['Unit_ID']))
+
+# Train ONLY on the 80% training set
+X_train = df.iloc[train_idx][ALL_FEATURES]
+y_train = df.iloc[train_idx]['True_Label']
+
+# Save the Test Unit IDs so we ONLY load unseen physical files later
+safe_test_unit_ids = df.iloc[test_idx]['Unit_ID'].unique()
 
 champion_pipeline = Pipeline([
     ('imputer', KNNImputer(n_neighbors=5)),
@@ -29,7 +37,7 @@ champion_pipeline = Pipeline([
 
 print("Training Gradient Boosting Champion...")
 champion_pipeline.fit(X_train, y_train)
-print("Model trained. Ready for Physical Sensitivity Sweep.")
+print("Model trained. Ready for Leakage-Free Sensitivity Sweep.")
 
 # ==========================================
 # 2. FREQUENCY-DEPENDENT NOISE INJECTOR
@@ -72,6 +80,17 @@ for noise in NOISE_LEVELS:
         unit_folders = glob.glob(os.path.join(target_folder, 'Unit_*'))[:MAX_FILES_PER_CLASS]
         
         for unit_path in unit_folders:
+            unit_name = os.path.basename(unit_path)
+            
+            # Reconstruct the Global Unit ID exactly as it looks in the CSV
+            # e.g., "Simulation_Radial_Moderate_Loc_8-9-10_Unit_45"
+            global_unit_id = f"{folder_name}_{unit_name}"
+            
+            # ANTI-LEAKAGE GUARD: If it's not in the safe test vault, skip it!
+            if global_unit_id not in safe_test_unit_ids:
+                continue
+            
+
             ref_path = os.path.join(unit_path, 'Trace_0.txt')
             if not os.path.exists(ref_path): continue
                 

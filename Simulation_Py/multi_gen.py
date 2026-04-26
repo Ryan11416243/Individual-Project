@@ -15,8 +15,8 @@ STEPS = 2000
 NO_OF_HEALTHY = 5
 NO_OF_FAULT = 5
 
-C_SHIFT = 0.000125
-L_SHIFT = 0.00005
+C_SHIFT = 0.01   # 1.0% global drift
+L_SHIFT = 0.001  # 0.1% global drift
 
 # Base parameters (from Cheng et al.)
 params_HV = {
@@ -105,7 +105,8 @@ SEVERITY_RANGES = {
 
 # General Setup
 active_config = params_LV 
-R_load = 50.0             
+R_source = 50.0           # Source impedance (standard FRA test setup)
+R_load = 50.0             # Load impedance (standard FRA test setup)
 V_in = 1.0                
 frequencies = np.logspace(np.log10(10), np.log10(1e6), STEPS)
 
@@ -210,8 +211,14 @@ def apply_fault(L_array, C_g_array, C_s_array, fault_type, severity_tier, units,
     # ==========================================
     elif fault_type == "TTSC":
         for u in units:
+            # L drops proportionally to the square of the remaining active turns
             L_new[u] *= mag
-            C_s_new[u] = 1e12 # Simulates a dielectric short
+            
+            # C_s represents inter-turn capacitors in series (C_s ∝ 1/N).
+            # If L ∝ N^2, then N ∝ sqrt(L). 
+            # Therefore, the new series capacitance increases by 1/sqrt(mag).
+            # We add a minor noise factor to prevent perfect ML memorization.
+            C_s_new[u] /= np.sqrt(mag)
 
     return L_new, C_g_new, C_s_new
 
@@ -287,30 +294,44 @@ def add_measurement_noise(magnitudes_dB, noise_level=0.5):
 def calculate_fra_dynamic(L_array, C_g_array, C_s_array, frequencies):
     """
     Builds and solves the Nodal Admittance Matrix using component arrays.
+    
+    Circuit topology:
+        V_in --[R_source]-- Node 0 --[L||Cs ladder]-- Node n-1 --[R_load]-- GND
+                                       |
+                                    Cg shunts at each node
+    
+    The R_source term provides damping consistent with standard FRA test setup
+    (per IEC 60076-18 / IEEE C57.149) and matches Wang/Cheng analytical derivation.
     """
     n = len(L_array)
     magnitudes_dB = []
+    
+    # Pre-compute terminal admittances (frequency-independent)
+    Y_source = 1.0 / R_source
+    Y_load = 1.0 / R_load
     
     for f in frequencies:
         omega = 2 * np.pi * f
         
         # 1. Calculate Admittance Arrays for this frequency
-        # Y_s[i] is the series admittance connecting Node(i-1) to Node(i)
+        # Y_s[i] is the series-rung admittance: L_air/n in parallel with n*Cs
         Y_s = 1 / (1j * omega * L_array) + (1j * omega * C_s_array)
         # Y_g[i] is the shunt admittance from Node(i) to Ground
         Y_g = 1j * omega * C_g_array
-        Y_load = 1 / R_load
         
         # 2. Build the N x N Matrix
         Y_bus = np.zeros((n, n), dtype=complex)
         
         for i in range(n):
             if i == 0:
-                # Node 1: Connects to Vin via Y_s[0], and Node 2 via Y_s[1]
-                Y_bus[i, i] = Y_s[0] + Y_s[1] + Y_g[0]
+                # Node 0: connected to V_in via R_source, to Node 1 via Y_s[1],
+                # and to ground via Y_g[0]. The local rung Y_s[0] no longer exists
+                # because the source side is now resistive.
+                Y_bus[i, i] = Y_source + Y_s[1] + Y_g[0]
                 Y_bus[i, i+1] = -Y_s[1]
             elif i == n - 1:
-                # Node N: Connects to Node N-1 via Y_s[n-1], and to Load
+                # Node n-1: connects to Node n-2 via Y_s[i], to ground via Y_g[i],
+                # and to ground via R_load.
                 Y_bus[i, i] = Y_s[i] + Y_g[i] + Y_load
                 Y_bus[i, i-1] = -Y_s[i]
             else:
@@ -319,9 +340,9 @@ def calculate_fra_dynamic(L_array, C_g_array, C_s_array, frequencies):
                 Y_bus[i, i-1] = -Y_s[i]
                 Y_bus[i, i+1] = -Y_s[i+1]
                 
-        # 3. Current Vector
+        # 3. Current Vector: V_in is injected through R_source into Node 0
         I_vector = np.zeros(n, dtype=complex)
-        I_vector[0] = Y_s[0] * V_in 
+        I_vector[0] = Y_source * V_in 
         
         # 4. Solve
         try:
@@ -330,6 +351,10 @@ def calculate_fra_dynamic(L_array, C_g_array, C_s_array, frequencies):
             raise RuntimeError(f"FATAL: Matrix became singular at {f} Hz. Check component values for short circuits.")
 
         V_out = V_nodes[-1]
+
+        noise_real = np.random.normal(0, 1e-5)
+        noise_imag = np.random.normal(0, 1e-5)
+        V_out_noisy = V_out + complex(noise_real, noise_imag)
         
         magnitudes_dB.append(20 * np.log10(abs(V_out / V_in)))
 

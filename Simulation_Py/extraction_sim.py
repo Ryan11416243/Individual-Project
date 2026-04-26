@@ -6,7 +6,6 @@ from scipy.signal import find_peaks
 import warnings
 import random
 
-from Simulation_Py.experiment5 import MAX_FILES_PER_CLASS
 
 # ==========================================
 # 1. CONFIGURATION SECTION
