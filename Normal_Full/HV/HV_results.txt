@@ -1,0 +1,155 @@
+Loading dataset...
+
+[DATA SPLIT] Class distribution in TEST set:
+True_Label
+0    1400
+1    1393
+2    1400
+3    1400
+4    1400
+Name: count, dtype: int64
+[DATA SPLIT] Class distribution in TRAIN set:
+True_Label
+0    5600
+1    5600
+2    5593
+3    5593
+4    5593
+Name: count, dtype: int64
+[DATA SPLIT] Massive Test Vault Frozen: 999 Unique Transformers.
+[DATA PREP] Subsampling Training Set -> Width: 200/class | Depth: 7/DNA
+
+  -> Training Subsampling complete. Train Shape: (6958, 51) | Test Shape: (6993, 51)
+
+
+[SUBSAMPLING] Unique DNAs per class in training set:
+True_Label
+0    200
+1    198
+2    198
+3    200
+4    198
+Name: Unit_ID, dtype: int64
+
+=== RUNNING FRA FEATURE ABLATION STUDY ===
+  -> All Features: 68.47%
+  -> High-Freq & Peaks (Capacitive): 68.48%
+  -> Low & Mid-Freq (Core/Inductive): 62.42%
+  -> Statistical Indices Only: 66.02%
+  -> Resonant Peaks Only: 63.34%
+c:\Users\t2rya\Documents\Year 3\Individual Project\Final\Multimodel.py:180: FutureWarning: 
+
+Passing `palette` without assigning `hue` is deprecated and will be removed in v0.14.0. Assign the `y` variable to `hue` and set `legend=False` for the same effect.
+
+  sns.barplot(x="Accuracy", y="Feature Set", data=ablation_df, palette="magma", legend=False)
+
+=== RUNNING CS HYPERPARAMETER TUNING ===
+Tuning Random Forest...
+  -> Best CV: 68.80% | Test Set: 68.05%
+Tuning Gradient Boosting...
+  -> Best CV: 69.04% | Test Set: 69.11%
+Tuning SVM (RBF)...
+  -> Best CV: 71.79% | Test Set: 71.84%
+
+=== HYPERPARAMETER OPTIMIZATION SUMMARY ===
+
+Model: Random Forest
+Test Accuracy: 68.05%
+Optimal Parameters Found: {'classifier__n_estimators': 200, 'classifier__min_samples_split': 10, 'classifier__max_depth': 10}
+
+Model: Gradient Boosting
+Test Accuracy: 69.11%
+Optimal Parameters Found: {'classifier__n_estimators': 200, 'classifier__max_depth': 3, 'classifier__learning_rate': 0.1}
+
+Model: SVM (RBF)
+Test Accuracy: 71.84%
+Optimal Parameters Found: {'classifier__kernel': 'rbf', 'classifier__gamma': 'scale', 'classifier__C': 100}
+
+All experiments complete. Plots saved to disk.
+
+=== PER-CLASS CLASSIFICATION REPORT (Gradient Boosting) ===
+              precision    recall  f1-score   support
+
+     Class 0       0.49      0.59      0.54      1400
+     Class 1       0.48      0.43      0.45      1393
+     Class 2       0.60      0.54      0.57      1400
+     Class 3       0.94      0.93      0.93      1400
+     Class 4       0.96      0.96      0.96      1400
+
+    accuracy                           0.69      6993
+   macro avg       0.69      0.69      0.69      6993
+weighted avg       0.69      0.69      0.69      6993
+
+
+=== MISCLASSIFICATION SEVERITY BREAKDOWN ===
+True_Label  Severity 
+0           0%           570
+1           Incipient    313
+            Moderate     259
+            Severe       226
+2           Incipient    381
+            Moderate     205
+            Severe        53
+Name: Count, dtype: int64
+
+=== RUNNING EXPERIMENT 3: WIDTH VS. DEPTH SCALABILITY ===
+  -> Width: 25 DNAs/Class | Depth: 1 Sweeps/DNA | Acc: 61.52%
+  -> Width: 50 DNAs/Class | Depth: 1 Sweeps/DNA | Acc: 64.04%
+  -> Width: 100 DNAs/Class | Depth: 1 Sweeps/DNA | Acc: 64.82%
+  -> Width: 150 DNAs/Class | Depth: 1 Sweeps/DNA | Acc: 64.94%
+  -> Width: 200 DNAs/Class | Depth: 1 Sweeps/DNA | Acc: 66.51%
+  -> Width: 25 DNAs/Class | Depth: 2 Sweeps/DNA | Acc: 61.65%
+  -> Width: 50 DNAs/Class | Depth: 2 Sweeps/DNA | Acc: 63.65%
+  -> Width: 100 DNAs/Class | Depth: 2 Sweeps/DNA | Acc: 65.02%
+  -> Width: 150 DNAs/Class | Depth: 2 Sweeps/DNA | Acc: 66.34%
+  -> Width: 200 DNAs/Class | Depth: 2 Sweeps/DNA | Acc: 67.32%
+  -> Width: 25 DNAs/Class | Depth: 3 Sweeps/DNA | Acc: 63.62%
+  -> Width: 50 DNAs/Class | Depth: 3 Sweeps/DNA | Acc: 65.98%
+  -> Width: 100 DNAs/Class | Depth: 3 Sweeps/DNA | Acc: 66.15%
+  -> Width: 150 DNAs/Class | Depth: 3 Sweeps/DNA | Acc: 66.47%
+  -> Width: 200 DNAs/Class | Depth: 3 Sweeps/DNA | Acc: 67.35%
+  -> Width: 25 DNAs/Class | Depth: 4 Sweeps/DNA | Acc: 63.02%
+  -> Width: 50 DNAs/Class | Depth: 4 Sweeps/DNA | Acc: 65.75%
+  -> Width: 100 DNAs/Class | Depth: 4 Sweeps/DNA | Acc: 67.28%
+  -> Width: 150 DNAs/Class | Depth: 4 Sweeps/DNA | Acc: 68.78%
+  -> Width: 200 DNAs/Class | Depth: 4 Sweeps/DNA | Acc: 68.13%
+  -> Width: 25 DNAs/Class | Depth: 5 Sweeps/DNA | Acc: 64.46%
+  -> Width: 50 DNAs/Class | Depth: 5 Sweeps/DNA | Acc: 64.92%
+  -> Width: 100 DNAs/Class | Depth: 5 Sweeps/DNA | Acc: 66.71%
+  -> Width: 150 DNAs/Class | Depth: 5 Sweeps/DNA | Acc: 68.61%
+  -> Width: 200 DNAs/Class | Depth: 5 Sweeps/DNA | Acc: 67.78%
+
+=== RUNNING EXPERIMENT 4: MODERATE/SEVERE ISOLATION ===
+  -> Accuracy on Full Test Set: 69.11%
+  -> Accuracy excluding 'Incipient' overlaps: 74.34%
+
+=== PREDICTIVE CONFIDENCE ANALYSIS (Gradient Boosting) ===
+  -> Average Confidence on CORRECT predictions: 80.85%
+  -> Average Confidence on INCORRECT predictions: 53.12%
+
+
+=== RUNNING EXPERIMENT 5: SPATIAL SENSITIVITY ===
+
+=== RUNNING EXPERIMENT 6: MULTI-MODEL ARCHITECTURE COMPARISON ===
+  -> Experiments complete. All plots saved.
+
+=== RUNNING EXPERIMENT 7: t-SNE FEATURE SPACE VISUALIZATION ===
+  -> Calculating t-SNE embeddings (This may take a minute)...
+  -> t-SNE Manifold saved as Plot_11.
+
+=== RUNNING EXPERIMENT 9: CROSS-VALIDATION STABILITY ===
+  -> Extracting CV folds for Random Forest...
+  -> Extracting CV folds for Gradient Boosting...
+  -> Extracting CV folds for SVM (RBF)...
+
+  
+  -> CV Stability Boxplots saved as Plot_13.
+
+=== EXTRACTING RANDOM FOREST FEATURE IMPORTANCES ===
+
+  -> RF Feature Importances saved as Plot 8b.
+
+=== EXTRACTING SVM FEATURE IMPORTANCES (Permutation) ===
+  -> Shuffling features to calculate SVM reliance (This takes a few seconds)...
+
+  -> SVM Permutation Importances saved as Plot 8c.
