@@ -1,8 +1,8 @@
 # Individual-Project
-Machine Learning for Power Transformer Condition Monitoring (FRA)
+# Machine Learning for Power Transformer Condition Monitoring (FRA)
 This repository contains the complete simulation, feature extraction, and machine learning classification pipeline for automating Frequency Response Analysis (FRA) diagnostics on power transformers. The project utilizes a custom physical simulation engine to generate synthetic fault data, engineers frequency-band features, and trains robust classifiers to identify mechanical and electrical deformations.
 
-System Architecture
+# System Architecture
 The pipeline is decoupled into three sequential stages to prevent data leakage and ensure reproducibility.
 
 1. Physics-Based Data Generation
